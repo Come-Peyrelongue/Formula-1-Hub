@@ -5,11 +5,11 @@ def create_database():
     conn = sqlite3.connect('f1_race_db.sqlite')
     cursor = conn.cursor()
 
-    # 1. Table: Circuits
+    # 1. Table: tracks
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS circuits (
+        CREATE TABLE IF NOT EXISTS tracks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            circuit_name TEXT NOT NULL,
+            track_name TEXT NOT NULL,
             country TEXT NOT NULL,
             length_km REAL NOT NULL
         )
@@ -25,15 +25,15 @@ def create_database():
     ''')
 
     # 3. Table: Results (Linking table)
-    # Links a driver to a circuit with a performance metric
+    # Links a driver to a track with a performance metric
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS results (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            circuit_id INTEGER,
+            track_id INTEGER,
             driver_id INTEGER,
             lap_time_sec REAL NOT NULL,
             year INTEGER NOT NULL,
-            FOREIGN KEY (circuit_id) REFERENCES circuits(id),
+            FOREIGN KEY (track_id) REFERENCES tracks(id),
             FOREIGN KEY (driver_id) REFERENCES drivers(id)
         )
     ''')

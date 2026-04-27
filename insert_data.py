@@ -4,14 +4,14 @@ def insert_sample_data():
     conn = sqlite3.connect('f1_race_db.sqlite')
     cursor = conn.cursor()
 
-    # 1. Insert Circuits
-    circuits = [
+    # 1. Insert tracks
+    tracks = [
         ('Silverstone', 'UK', 5.891),
         ('Spa-Francorchamps', 'Belgium', 7.004),
         ('Monza', 'Italy', 5.793),
         ('Suzuka', 'Japan', 5.807)
     ]
-    cursor.executemany('INSERT INTO circuits (circuit_name, country, length_km) VALUES (?, ?, ?)', circuits)
+    cursor.executemany('INSERT INTO tracks (track_name, country, length_km) VALUES (?, ?, ?)', tracks)
 
     # 2. Insert Drivers
     drivers = [
@@ -23,7 +23,7 @@ def insert_sample_data():
     cursor.executemany('INSERT INTO drivers (driver_name, team) VALUES (?, ?)', drivers)
 
     # 3. Insert Results
-    # Format: (circuit_id, driver_id, lap_time_sec, year)
+    # Format: (track_id, driver_id, lap_time_sec, year)
     results = [
         (1, 1, 85.500, 2025), # Verstappen at Silverstone
         (1, 2, 86.120, 2025), # Hamilton at Silverstone
@@ -32,7 +32,7 @@ def insert_sample_data():
         (3, 4, 82.300, 2025),  # Piastri at Monza
         (4, 1, 92.100, 2025)   # Verstappen at Suzuka
     ]
-    cursor.executemany('INSERT INTO results (circuit_id, driver_id, lap_time_sec, year) VALUES (?, ?, ?, ?)', results)
+    cursor.executemany('INSERT INTO results (track_id, driver_id, lap_time_sec, year) VALUES (?, ?, ?, ?)', results)
 
     conn.commit()
     conn.close()

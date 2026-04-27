@@ -10,26 +10,26 @@ def format_time(seconds):
     # :06.3f ensures we always have 2 digits for seconds and 3 for milliseconds
     return f"{minutes}:{remaining_seconds:06.3f}"
 
-def show_avg_lap_time_per_circuit():
-    """Calculates the average lap time for each circuit."""
+def show_avg_lap_time_per_track():
+    """Calculates the average lap time for each track."""
     conn = get_connection()
     cursor = conn.cursor()
     
     query = """
-        SELECT c.circuit_name, AVG(r.lap_time_sec) as avg_time
+        SELECT c.track_name, AVG(r.lap_time_sec) as avg_time
         FROM results r
-        JOIN circuits c ON r.circuit_id = c.id
-        GROUP BY c.circuit_name
+        JOIN tracks c ON r.track_id = c.id
+        GROUP BY c.track_name
         ORDER BY avg_time ASC
     """
     
     cursor.execute(query)
     results = cursor.fetchall()
     
-    print("--- Average Lap Time per Circuit ---")
-    for circuit, time in results:
+    print("--- Average Lap Time per track ---")
+    for track, time in results:
         formatted_time = format_time(time)
-        print(f"{circuit}: {formatted_time}")
+        print(f"{track}: {formatted_time}")
     
     conn.close()
 
@@ -62,10 +62,10 @@ def filter_by_team(team_search):
     cursor = conn.cursor()
     
     query = """
-        SELECT d.driver_name, c.circuit_name, r.lap_time_sec, r.year
+        SELECT d.driver_name, c.track_name, r.lap_time_sec, r.year
         FROM results r
         JOIN drivers d ON r.driver_id = d.id
-        JOIN circuits c ON r.circuit_id = c.id
+        JOIN tracks c ON r.track_id = c.id
         WHERE d.team = ?
     """
     
@@ -76,13 +76,13 @@ def filter_by_team(team_search):
     if not results:
         print("No results found.")
     else:
-        for driver, circuit, time, year in results:
+        for driver, track, time, year in results:
             formatted_time = format_time(time)
-            print(f"{driver} at {circuit} ({year}) : {formatted_time}")
+            print(f"{driver} at {track} ({year}) : {formatted_time}")
             
     conn.close()
 
 if __name__ == "__main__":
-    show_avg_lap_time_per_circuit()
+    show_avg_lap_time_per_track()
     show_best_lap_per_driver()
     filter_by_team('Red Bull Racing')
