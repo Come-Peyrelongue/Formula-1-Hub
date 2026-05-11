@@ -37,6 +37,7 @@ class OpenF1Connector:
         self.norm_min_y = 0
         self.norm_max_y = 1000
         self.total_samples = 0
+        self.sim_track = SIMULATION_TRACK # Initialize sim_track
 
     def initialize_session(self):
         print("🔄 Connecting to OpenF1 API...")
@@ -56,7 +57,7 @@ class OpenF1Connector:
             meeting_key = target.get('meeting_key')
             print(f"✅ Selected: {target.get('location')}")
 
-            # 2. Fetch Official Track (With SSL bypass and timeout)
+            # 2. Fetch Official Track
             official_loaded = False
             if meeting_key:
                 try:
@@ -67,7 +68,6 @@ class OpenF1Connector:
                         if meet_data and 'circuit_info_url' in meet_data[0]:
                             info_url = meet_data[0]['circuit_info_url']
                             print(f"🗺️  Fetching official track: {info_url}")
-                            # CRITICAL: verify=False and higher timeout
                             info_resp = requests.get(info_url, timeout=10, verify=False)
                             if info_resp.status_code == 200:
                                 circuit_data = info_resp.json()
@@ -107,7 +107,7 @@ class OpenF1Connector:
             self.total_samples = len(self.car_data_cache)
             print(f"⏩ Racing samples: {self.total_samples}")
 
-            # 4. Calculate Bounds (Increased Padding to 15% to shrink track)
+            # 4. Calculate Bounds
             points = self.track_layout if official_loaded else [(p['x'], p['y']) for p in self.location_cache]
             if points:
                 xs = [p[0] for p in points]
@@ -115,7 +115,7 @@ class OpenF1Connector:
                 self.norm_min_x, self.norm_max_x = min(xs), max(xs)
                 self.norm_min_y, self.norm_max_y = min(ys), max(ys)
                 
-                padding_x = (self.norm_max_x - self.norm_min_x) * 0.15 # 15% Padding
+                padding_x = (self.norm_max_x - self.norm_min_x) * 0.15
                 padding_y = (self.norm_max_y - self.norm_min_y) * 0.15
                 self.norm_min_x -= padding_x
                 self.norm_max_x += padding_x
@@ -164,7 +164,7 @@ class OpenF1Connector:
             
             self.current_index += 1
             if self.current_index >= self.total_samples:
-                self.current_index = 0 # Infinite Loop
+                self.current_index = 0
             
             curr_x = self.normalize(sample_loc['x'], self.norm_min_x, self.norm_max_x)
             curr_y = self.normalize(sample_loc['y'], self.norm_min_y, self.norm_max_y)
@@ -194,7 +194,6 @@ class OpenF1Connector:
                 "date": sample_car.get('date', 'mode = REAL')
             }
         else:
-            # Simulation fallback (same as before)
             if not self.sim_track: return {"x": 500, "y": 500, "speed": 0}
             idx = int(self.sim_pos)
             next_idx = (idx + 1) % len(self.sim_track)
@@ -281,24 +280,19 @@ def get_historical_data():
     
     return jsonify({'results': results, 'tracks': tracks, 'drivers': drivers})
 
-# ---------------------------------------------------------
-# NEW ROUTES: HISTORICAL CHAMPIONSHIP & RACE RESULTS
-# ---------------------------------------------------------
-
 @app.route('/api/championship/years', methods=['GET'])
 def get_championship_years():
-    # On retourne les 5 dernières années disponibles
     return jsonify([2024, 2023, 2022, 2021, 2020])
 
 @app.route('/api/championship/<int:year>', methods=['GET'])
 def get_championship_data(year):
-    """Retourne la liste des sessions (GP) de l'année."""
+    """Returns the list of sessions (GPs) for the year."""
     headers = {"User-Agent": "Mozilla/5.0"}
     
     try:
         sessions = []
         
-        # STRATÉGIE 1 : Essayer avec session_name='Race' (Le plus fiable selon la doc)
+        # Strategy 1: Try with session_name='Race'
         req = requests.Request('GET', f"{connector.base_url}/sessions", 
                                params={'year': year, 'session_name': 'Race'}, 
                                headers=headers).prepare()
@@ -307,7 +301,7 @@ def get_championship_data(year):
         if resp.status_code == 200:
             sessions = resp.json()
         
-        # STRATÉGIE 2 : Si vide, essayer sans filtre et filtrer manuellement
+        # Strategy 2: Fallback unfiltered
         if not sessions:
             print(f"⚠️ No sessions found with filter for {year}. Trying unfiltered...")
             req = requests.Request('GET', f"{connector.base_url}/sessions", 
@@ -316,25 +310,20 @@ def get_championship_data(year):
             resp = requests.get(req.url, timeout=10, verify=False)
             if resp.status_code == 200:
                 all_sessions = resp.json()
-                # Filtrer manuellement pour ne garder que les courses
                 sessions = [s for s in all_sessions if s.get('session_type') == 'Race' or s.get('session_name') == 'Race']
 
         if not sessions:
             print(f"⚠️ No race sessions found for year {year}.")
             return jsonify({'year': year, 'races': []}), 200
             
-        # Trier les sessions par date
         sessions.sort(key=lambda x: x.get('date_start', ''))
         
-        # Formater pour le frontend
         races_list = []
         for s in sessions:
             if 'session_key' in s:
-                # Priorité : Meeting Name > Circuit Name > Country > "Unknown GP"
                 race_name = s.get('meeting_name') or s.get('circuit_short_name') or s.get('country_name') or "Unknown GP"
                 circuit_name = s.get('circuit_short_name') or ""
                 
-                # Si on a déjà le nom de la course, on n'affiche pas deux fois la même chose
                 if circuit_name and race_name != circuit_name:
                     display_name = f"{race_name} ({circuit_name})"
                 else:
@@ -359,10 +348,9 @@ def get_championship_data(year):
         
 @app.route('/api/standings/<int:year>', methods=['GET'])
 def get_driver_standings(year):
-    """Récupère le classement final des pilotes pour une année donnée."""
+    """Retrieves final driver standings for a given year (Legacy)."""
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        # On cherche la DERNIÈRE course de l'année pour avoir le classement final
         req = requests.Request('GET', f"{connector.base_url}/sessions", 
                                params={'year': year, 'session_type': 'Race'}, 
                                headers=headers).prepare()
@@ -372,11 +360,9 @@ def get_driver_standings(year):
         if not sessions:
             return jsonify({'standings': []})
             
-        # La dernière course de la liste triée contient le classement final
         sessions.sort(key=lambda x: x.get('date_start', ''))
         last_race_key = sessions[-1]['session_key']
         
-        # Récupérer les résultats de la dernière course (qui est le classement final)
         res_req = requests.Request('GET', f"{connector.base_url}/session_result", 
                                    params={'session_key': last_race_key}, 
                                    headers=headers).prepare()
@@ -384,7 +370,6 @@ def get_driver_standings(year):
         
         if res_resp.status_code == 200:
             results = res_resp.json()
-            # Trier par position
             results.sort(key=lambda x: x.get('position', 99))
             return jsonify({'standings': results})
         else:
@@ -395,10 +380,9 @@ def get_driver_standings(year):
 
 @app.route('/api/race-result/<int:session_key>', methods=['GET'])
 def get_race_result(session_key):
-    """Récupère les résultats détaillés d'une course spécifique avec les noms des pilotes."""
+    """Retrieves detailed results for a specific race with driver names."""
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        # 1. Récupérer les résultats bruts
         req_res = requests.Request('GET', f"{connector.base_url}/session_result", 
                                    params={'session_key': session_key}, 
                                    headers=headers).prepare()
@@ -412,7 +396,6 @@ def get_race_result(session_key):
         if not results:
             return jsonify({'results': []}), 200
 
-        # 2. Récupérer la liste des pilotes pour cette session (pour avoir les noms)
         req_drv = requests.Request('GET', f"{connector.base_url}/drivers", 
                                    params={'session_key': session_key}, 
                                    headers=headers).prepare()
@@ -421,21 +404,18 @@ def get_race_result(session_key):
         driver_map = {}
         if resp_drv.status_code == 200:
             drivers = resp_drv.json()
-            # Créer un dictionnaire: { "16": "Charles Leclerc", "1": "Max Verstappen" }
             for d in drivers:
                 num = str(d.get('driver_number'))
                 name = d.get('full_name') or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip()
                 if num and name:
                     driver_map[num] = name
 
-        # 3. Enrichir les résultats avec les noms
         enriched_results = []
         for r in results:
             driver_num = str(r.get('driver_number', ''))
             r['driver_name'] = driver_map.get(driver_num, f"Driver #{driver_num}")
             enriched_results.append(r)
             
-        # Trier par position (gérer les None)
         enriched_results.sort(key=lambda x: x.get('position') if x.get('position') is not None else 99)
         
         return jsonify({'results': enriched_results})
@@ -446,37 +426,98 @@ def get_race_result(session_key):
 
 @app.route('/api/championship-standings/<int:year>', methods=['GET'])
 def get_real_standings(year):
-    """Récupère le classement final des pilotes."""
+    """Retrieves final driver standings with robust error handling and driver names."""
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        # Trouver la dernière course
+        # 1. Find the last race of the year
         req = requests.Request('GET', f"{connector.base_url}/sessions", 
                                params={'year': year, 'session_type': 'Race'}, 
                                headers=headers).prepare()
         resp = requests.get(req.url, timeout=10, verify=False)
         
-        sessions = resp.json()
+        sessions = resp.json() if resp.status_code == 200 else []
+        
+        # Fallback if 'Race' filter returns nothing
         if not sessions:
-            return jsonify({'standings': []}), 200
+            req = requests.Request('GET', f"{connector.base_url}/sessions", 
+                                   params={'year': year}, 
+                                   headers=headers).prepare()
+            resp = requests.get(req.url, timeout=10, verify=False)
+            all_sessions = resp.json() if resp.status_code == 200 else []
+            sessions = [s for s in all_sessions if s.get('session_type') == 'Race' or s.get('session_name') == 'Race']
+
+        if not sessions:
+            print(f"⚠️ No race sessions found for year {year}. Returning empty list.")
+            return jsonify({
+                'standings': [], 
+                'message': f"No race data found for {year} in the OpenF1 API."
+            }), 200
             
         sessions = sorted(sessions, key=lambda x: x.get('date_start', ''))
         last_key = sessions[-1]['session_key']
         
-        # Appeler championship_drivers
+        # 2. Fetch championship standings
         stand_req = requests.Request('GET', f"{connector.base_url}/championship_drivers", 
                                      params={'session_key': last_key}, 
                                      headers=headers).prepare()
         stand_resp = requests.get(stand_req.url, timeout=10, verify=False)
         
-        if stand_resp.status_code == 200:
-            data = stand_resp.json()
-            # Trier par position actuelle
-            data.sort(key=lambda x: x.get('position_current', 99))
-            return jsonify({'standings': data})
-        return jsonify({'standings': []})
+        if stand_resp.status_code != 200:
+            return jsonify({
+                'standings': [], 
+                'message': "Unable to retrieve championship data."
+            }), 200
+            
+        standings_data = stand_resp.json()
+        
+        # SAFETY: Ensure data is a list of dictionaries
+        if not isinstance(standings_data, list):
+            print(f"⚠️ Unexpected data format for {year}: {type(standings_data)}")
+            return jsonify({
+                'standings': [], 
+                'message': "Invalid data format received from API."
+            }), 200
+
+        # 3. Fetch driver list to map names
+        req_drv = requests.Request('GET', f"{connector.base_url}/drivers", 
+                                   params={'session_key': last_key}, 
+                                   headers=headers).prepare()
+        resp_drv = requests.get(req_drv.url, timeout=10, verify=False)
+        
+        driver_map = {}
+        if resp_drv.status_code == 200:
+            drivers = resp_drv.json()
+            for d in drivers:
+                if isinstance(d, dict):
+                    num = str(d.get('driver_number'))
+                    name = d.get('full_name') or f"{d.get('first_name', '')} {d.get('last_name', '')}".strip()
+                    if num and name:
+                        driver_map[num] = name
+
+        # 4. Enrich data
+        enriched_standings = []
+        for row in standings_data:
+            # Safety: Skip items that aren't dictionaries
+            if not isinstance(row, dict):
+                continue
+                
+            driver_num = str(row.get('driver_number', ''))
+            row['driver_name'] = driver_map.get(driver_num, f"Driver #{driver_num}")
+            enriched_standings.append(row)
+            
+        if not enriched_standings:
+            return jsonify({
+                'standings': [], 
+                'message': f"No drivers found for the {year} season."
+            }), 200
+
+        enriched_standings.sort(key=lambda x: x.get('position_current', 99))
+        
+        return jsonify({'standings': enriched_standings})
+        
     except Exception as e:
         print(f"❌ Error in /api/championship-standings/{year}: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'standings': [], 'error': str(e)}), 500
 
 @app.route('/api/live-stream', methods=['GET'])
 def get_live_stream():

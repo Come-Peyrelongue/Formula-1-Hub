@@ -1,6 +1,79 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
 
+// Utility function to convert seconds to H:MM:SS.mmm or M:SS.mmm
+const formatRaceTime = (seconds) => {
+  if (seconds === null || seconds === undefined || isNaN(seconds)) return "-";
+  
+  const totalSeconds = Math.floor(seconds);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const secs = totalSeconds % 60;
+  const ms = Math.round((seconds - Math.floor(seconds)) * 1000);
+
+  const mm = minutes.toString().padStart(2, '0');
+  const ss = secs.toString().padStart(2, '0');
+  const mmm = ms.toString().padStart(3, '0');
+
+  if (hours > 0) {
+    return `${hours}:${mm}:${ss}.${mmm}`;
+  }
+  return `${minutes}:${ss}.${mmm}`;
+};
+
+// Helper to normalize country code for flag-icons
+// flag-icons uses ISO 3166-1 alpha-2 codes (e.g., 'fr', 'gb', 'us')
+const getCountryCode = (countryName) => {
+  if (!countryName) return 'xx'; // 'xx' is often unknown/neutral
+
+  const codeMap = {
+    'Bahrain': 'bh',
+    'Saudi Arabia': 'sa',
+    'Australia': 'au',
+    'Azerbaijan': 'az',
+    'Japan': 'jp',
+    'China': 'cn',
+    'Miami': 'us', // Miami is in US
+    'Emilia Romagna': 'it', // Imola
+    'Monaco': 'mc',
+    'Canada': 'ca',
+    'Spain': 'es',
+    'Austria': 'at',
+    'Great Britain': 'gb',
+    'UK': 'gb',
+    'Hungary': 'hu',
+    'Belgium': 'be',
+    'Netherlands': 'nl',
+    'Italy': 'it',
+    'Singapore': 'sg',
+    'United States': 'us',
+    'USA': 'us',
+    'Mexico': 'mx',
+    'Brazil': 'br',
+    'Las Vegas': 'us',
+    'Qatar': 'qa',
+    'Abu Dhabi': 'ae',
+    'UAE': 'ae'
+  };
+
+  // Try direct match first (case insensitive)
+  const lowerName = countryName.toLowerCase();
+  
+  // Check if the API already sent a code (e.g. 'FR')
+  if (countryName.length === 2) {
+    return countryName.toLowerCase();
+  }
+
+  // Check our map for full country names
+  for (const [name, code] of Object.entries(codeMap)) {
+    if (lowerName.includes(name.toLowerCase())) {
+      return code;
+    }
+  }
+
+  return 'xx'; // Fallback flag
+};
+
 function HistoricalPage() {
   const [years, setYears] = useState([])
   const [selectedYear, setSelectedYear] = useState(2024)
@@ -10,14 +83,14 @@ function HistoricalPage() {
   const [loading, setLoading] = useState(false)
   const [viewMode, setViewMode] = useState('championship')
 
-  // 1. Charger les années au démarrage
+  // 1. Load years on startup
   useEffect(() => {
     axios.get('http://127.0.0.1:5000/api/championship/years')
       .then(res => setYears(res.data))
       .catch(err => console.error(err))
   }, [])
 
-  // 2. Charger les courses quand l'année change
+  // 2. Load races when year changes
   useEffect(() => {
     if (!selectedYear) return
     setLoading(true)
@@ -31,19 +104,34 @@ function HistoricalPage() {
       .finally(() => setLoading(false))
   }, [selectedYear])
 
-  // 3. Fetcher les données
+  // 3. Fetch data
   const fetchStandings = (year) => {
     setLoading(true)
     setViewMode('championship')
+    setData([]) // Clear data immediately
+    
     axios.get(`http://127.0.0.1:5000/api/championship-standings/${year}`)
-      .then(res => setData(res.data.standings))
-      .catch(err => console.error(err))
+      .then(res => {
+        if (res.data.standings) {
+            setData(res.data.standings);
+        } else {
+            setData([]);
+        }
+      })
+      .catch(err => {
+        console.error(err);
+        if (err.response && err.response.data && err.response.data.error) {
+            setData({ message: err.response.data.error });
+        }
+      })
       .finally(() => setLoading(false))
   }
 
   const fetchRaceResult = (sessionKey) => {
     setLoading(true)
     setViewMode('race')
+    setData([]) // Clear data immediately
+    
     axios.get(`http://127.0.0.1:5000/api/race-result/${sessionKey}`)
       .then(res => setData(res.data.results))
       .catch(err => console.error(err))
@@ -61,13 +149,13 @@ function HistoricalPage() {
   }
 
   return (
-    <div className="card shadow-sm border-0">
-      <div className="card-header bg-white border-bottom-0 pt-4">
-        <h2 className="fw-bold text-dark">📜 Historical Archives</h2>
+    <div>
+      <div>
+        <h2 className="fw-bold text-dark">Results</h2>
         <p className="text-muted">Explore past seasons and race results.</p>
       </div>
       
-      <div className="card-body">
+      <div>
         {/* Controls */}
         <div className="row g-3 mb-4">
           <div className="col-md-4">
@@ -89,12 +177,17 @@ function HistoricalPage() {
               onChange={handleRaceChange}
               disabled={loading}
             >
-              <option value="championship">🏆 {selectedYear} Championship Standings</option>
-              {races.map(r => (
-                <option key={r.session_key} value={r.session_key}>
-                  🏁 {r.name} ({r.date})
-                </option>
-              ))}
+              <option value="championship">
+                <span className="fi fi-xx me-2"></span> {selectedYear} Championship Standings
+              </option>
+              {races.map(r => {
+                const flagCode = getCountryCode(r.country);
+                return (
+                  <option key={r.session_key} value={r.session_key}>
+                    <span className={`fi fi-${flagCode} me-2`}></span> {r.name} ({r.date})
+                  </option>
+                );
+              })}
             </select>
           </div>
         </div>
@@ -109,68 +202,62 @@ function HistoricalPage() {
           </div>
         ) : (
           <div className="table-responsive">
-            <table className="table table-hover align-middle">
-              <thead className="table-dark">
-                <tr>
-                  <th scope="col" className="ps-3">Pos</th>
-                  <th scope="col">Driver</th>
-                  <th scope="col">Team / Info</th>
-                  
-                  {viewMode === 'championship' ? (
-                    <>
-                      <th scope="col" className="text-end">Points</th>
-                      <th scope="col" className="text-center">Pos</th>
-                    </>
-                  ) : (
-                    <>
-                      <th scope="col" className="text-end">Time / Gap</th>
-                      <th scope="col" className="text-center">Laps</th>
-                    </>
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {data.length === 0 ? (
-                  <tr><td colSpan="5" className="text-center py-4">No results found for this race.</td></tr>
-                ) : (
-                  data.map((row, idx) => {
+            {data.length === 0 ? (
+              <div className="alert alert-warning text-center py-4" role="alert">
+                <h4 className="alert-heading">No Results Available</h4>
+                <p>
+                  {data.message || "Data for this season is not available in the OpenF1 archive."}
+                </p>
+                <hr />
+                <p className="mb-0 small">
+                  Try another year or check if the season was completed.
+                </p>
+              </div>
+            ) : (
+              <table className="table table-hover align-middle">
+                <thead className="table-dark">
+                  <tr>
+                    <th scope="col" className="ps-3">Pos</th>
+                    <th scope="col">Driver</th>
+                    <th scope="col">Team / Info</th>
+                    
+                    {viewMode === 'championship' ? (
+                      <>
+                        <th scope="col" className="text-end">Points</th>
+                      </>
+                    ) : (
+                      <>
+                        <th scope="col" className="text-end">Time / Gap</th>
+                        <th scope="col" className="text-center">Laps</th>
+                      </>
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.map((row, idx) => {
                     const isDNF = row.dnf || row.dns || row.dsq;
                     const pos = row.position_current || row.position;
                     
-                    // Sécurité pour l'affichage des médailles
                     let posDisplay = pos;
-                    if (pos === 1) posDisplay = '🥇';
-                    else if (pos === 2) posDisplay = '🥈';
-                    else if (pos === 3) posDisplay = '🥉';
 
-                    // Sécurité pour le temps/écart
-                    let timeDisplay = "-";
-                    let gapDisplay = "";
+                    const timeDisplay = viewMode === 'race' ? formatRaceTime(row.duration) : "-";
                     
-                    if (viewMode === 'race') {
-                        if (row.duration) {
-                            timeDisplay = row.duration.toFixed(3) + "s";
+                    let gapDisplay = "";
+                    if (viewMode === 'race' && row.gap_to_leader !== null && row.gap_to_leader !== undefined) {
+                        if (typeof row.gap_to_leader === 'number') {
+                            gapDisplay = `+${row.gap_to_leader.toFixed(3)}s`;
                         } else {
-                            timeDisplay = "+ LAP"; // Ou DNF
-                        }
-
-                        // Gestion robuste du gap_to_leader
-                        if (row.gap_to_leader !== null && row.gap_to_leader !== undefined) {
-                            // Si c'est un nombre, on formate. Si c'est une chaîne (ex: "+1 LAP"), on l'affiche telle quelle.
-                            if (typeof row.gap_to_leader === 'number') {
-                                gapDisplay = `+${row.gap_to_leader.toFixed(3)}s`;
-                            } else {
-                                gapDisplay = String(row.gap_to_leader);
-                            }
+                            gapDisplay = String(row.gap_to_leader);
                         }
                     }
 
                     return (
                       <tr key={idx}>
-                        <td className="ps-3 fw-bold fs-5">{posDisplay}</td>
+                        <td className="ps-3 fw-bold fs-5">
+                          {posDisplay}
+                          {isDNF && <span className="badge bg-danger">DNF</span>}</td>
                         <td>
                           <div className="fw-bold">{row.driver_name || `Driver #${row.driver_number}`}</div>
-                          {isDNF && <span className="badge bg-danger">DNF</span>}
                         </td>
                         <td>
                           <small className="text-muted">
@@ -183,13 +270,10 @@ function HistoricalPage() {
                             <td className="text-end fw-bold fs-5 text-primary">
                               {row.points_current !== undefined ? row.points_current : '-'}
                             </td>
-                            <td className="text-center text-muted">
-                              {row.position_current !== undefined ? row.position_current : '-'}
-                            </td>
                           </>
                         ) : (
                           <>
-                            <td className="text-end font-monospace">
+                            <td className="text-end font-monospace fs-6">
                               {timeDisplay}
                               {gapDisplay && (
                                 <div className="small text-muted">{gapDisplay}</div>
@@ -200,10 +284,10 @@ function HistoricalPage() {
                         )}
                       </tr>
                     )
-                  })
-                )}
-              </tbody>
-            </table>
+                  })}
+                </tbody>
+              </table>
+            )}
             
             {viewMode === 'championship' && data.length > 0 && (
               <div className="alert alert-info mt-3">
