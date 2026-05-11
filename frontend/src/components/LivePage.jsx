@@ -23,12 +23,11 @@ function LivePage() {
   }, [])
 
   return (
-    <div className="container mt-4">
-      <div className="d-flex justify-content-between align-items-center mb-3">
-        <h2 className="text-danger">🔴 Live Timing Session</h2>
-        <small className="text-muted">Updated: {lastUpdate.toLocaleTimeString()}</small>
+    <div>
+      <div>
+        <h2 className="fw-bold text-dark">Live Timing</h2>
       </div>
-      <div className="card p-3 shadow-sm">
+      <div>
         <table className="table table-hover">
           <thead className="table-dark">
             <tr><th>Status</th><th>Driver</th><th>Team</th><th>Track</th><th>Time</th><th>Year</th></tr>
