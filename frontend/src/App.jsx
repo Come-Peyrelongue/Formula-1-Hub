@@ -42,9 +42,9 @@ function AppContent() {
               <div className="sidebar-divider" />
 
               <li className="nav-item">
-                <NavLink to="/telemetry" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`}>
-                  <span className="material-symbols-outlined">monitoring</span>
-                  <span className="sidebar-text">Telemetry</span>
+                <NavLink to="/replay" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`}>
+                  <span className="material-symbols-outlined">play_circle</span>
+                  <span className="sidebar-text">Replay</span>
                 </NavLink>
               </li>
             </ul>
@@ -87,7 +87,7 @@ function AppContent() {
             <Route path="/" element={<Home />} />
             <Route path="/historical" element={<HistoricalPage />} />
             <Route path="/live" element={<LivePage />} />
-            <Route path="/telemetry" element={<TelemetryPage />} />
+            <Route path="/replay" element={<TelemetryPage />} />
           </Routes>
         </main>
 

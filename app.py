@@ -16,33 +16,12 @@ CORS(app, resources={r"/api/*": {"origins": "http://localhost:5173"}})
 
 DATABASE = 'f1_race_db.sqlite'
 
-SIMULATION_TRACK = [
-    (500, 900), (450, 855), (400, 800), (350, 700), (300, 600),
-    (250, 500), (200, 450), (150, 400), (100, 350), (50, 300),
-    (50, 200), (100, 150), (200, 100), (300, 50), (400, 50),
-    (500, 100), (600, 150), (700, 200), (800, 250), (900, 300),
-    (950, 400), (950, 500), (900, 600), (850, 700), (800, 800),
-    (700, 850), (600, 900), (500, 900)
-]
-
-FLAG_CATEGORIES = {"Flag", "SafetyCar", "SessionStatus"}
-
-# Priority weights for flag events — higher wins when timestamps are equal.
-# Also used to prevent a low-priority event from clearing a high-priority one.
 FLAG_PRIORITY = {
-    "green": 1,
-    "blue": 1,
-    "black_white": 1,
-    "black": 2,
-    "formation": 2,
-    "yellow": 3,
-    "vsc": 4,
-    "safety_car": 5,
-    "red": 6,
-    "chequered": 6,
+    "green": 1, "blue": 1, "black_white": 1, "black": 2,
+    "formation": 2, "yellow": 3, "vsc": 4, "safety_car": 5,
+    "red": 6, "chequered": 6,
 }
 
-# Tyre compound temperature windows (°C): (cold_limit, optimal_low, optimal_high, overheat)
 TYRE_TEMP_WINDOWS = {
     "SOFT":         (75, 85, 105, 115),
     "MEDIUM":       (80, 90, 115, 125),
@@ -73,15 +52,10 @@ def lerp(a, b, t):
 
 
 # ---------------------------------------------------------------------------
-# Race-control: classify events
+# Race-control
 # ---------------------------------------------------------------------------
 
 def _classify_rc_event(rc):
-    """
-    Returns (label, type_, scope) for a race-control event.
-    scope is "track" or "sector".
-    Returns (None, None, None) if the event should be completely ignored.
-    """
     message  = (rc.get('message')  or '').upper()
     flag     = (rc.get('flag')     or '').upper()
     category = (rc.get('category') or '').upper()
@@ -106,47 +80,31 @@ def _classify_rc_event(rc):
         return None, None, None
 
     if category == "FLAG":
-        # Determine if sector-specific
-        is_sector = (
-            scope_raw == "SECTOR" or
-            "SECTOR" in message or
-            "IN TRACK SECTOR" in message
-        )
+        is_sector = (scope_raw == "SECTOR" or "SECTOR" in message or "IN TRACK SECTOR" in message)
         scope = "sector" if is_sector else "track"
 
         if "RED" in flag or "RED FLAG" in message:
-            return "RED FLAG", "red", "track"  # RED is always track-wide
+            return "RED FLAG", "red", "track"
         if "CHEQUERED" in flag or "CHECKERED" in flag:
             return "CHEQUERED FLAG", "chequered", "track"
-
-        # Sector-specific yellow: include (shows in banner)
         if "DOUBLE YELLOW" in flag or "DOUBLE YELLOW" in message:
             return "YELLOW FLAG", "yellow", scope
         if "YELLOW" in flag:
             return "YELLOW FLAG", "yellow", scope
-
-        # GREEN / CLEAR
         if "GREEN" in flag or "CLEAR" in message:
             return "GREEN FLAG", "green", scope
-
         if "BLUE" in flag:
             return "BLUE FLAG", "blue", scope
         if "BLACK AND WHITE" in flag:
             return "BLACK & WHITE", "black_white", scope
         if "BLACK" in flag:
             return "BLACK FLAG", "black", scope
-
         return None, None, None
 
     return None, None, None
 
 
 def build_flag_timeline(race_control_cache):
-    """
-    Returns a sorted list of (datetime, label, type_, scope, rc) for every
-    event that represents a flag change. Sorted by (time, priority DESC)
-    so that higher-priority events always "win" at the same timestamp.
-    """
     timeline = []
     for rc in race_control_cache:
         label, type_, scope = _classify_rc_event(rc)
@@ -156,13 +114,13 @@ def build_flag_timeline(race_control_cache):
         if dt is not None:
             priority = FLAG_PRIORITY.get(type_, 0)
             timeline.append((dt, priority, label, type_, scope, rc))
-
-    # Sort by time ASC, then priority DESC (so highest priority is last = bisect finds it)
     timeline.sort(key=lambda x: (x[0], x[1]))
-
-    # Return in final format
     return [(dt, label, type_, scope, rc) for dt, pri, label, type_, scope, rc in timeline]
 
+
+# ---------------------------------------------------------------------------
+# Standings Manager
+# ---------------------------------------------------------------------------
 
 class RaceStandingsManager:
     def __init__(self):
@@ -190,7 +148,7 @@ class RaceStandingsManager:
                     "team_colour": d.get("team_colour", "FFFFFF"),
                     "full_name":   d.get("full_name", ""),
                 }
-        print(f"✅ Loaded {len(self.driver_map)} drivers.")
+        print(f"  ✅ Loaded {len(self.driver_map)} drivers.")
 
         raw_pos = get("position", {"session_key": session_key})
         for p in raw_pos:
@@ -198,13 +156,12 @@ class RaceStandingsManager:
             if dt is None:
                 continue
             self.position_events.append({
-                "date_dt":       dt,
-                "driver_number": int(p.get("driver_number", 0)),
-                "position":      int(p.get("position", 99)),
+                "date_dt": dt, "driver_number": int(p.get("driver_number", 0)),
+                "position": int(p.get("position", 99)),
             })
         self.position_events.sort(key=lambda x: x["date_dt"])
         self._pos_dates = [e["date_dt"] for e in self.position_events]
-        print(f"✅ Loaded {len(self.position_events)} position events.")
+        print(f"  ✅ Loaded {len(self.position_events)} position events.")
 
         raw_int = get("intervals", {"session_key": session_key})
         for iv in raw_int:
@@ -212,14 +169,12 @@ class RaceStandingsManager:
             if dt is None:
                 continue
             self.interval_events.append({
-                "date_dt":       dt,
-                "driver_number": int(iv.get("driver_number", 0)),
-                "gap_to_leader": iv.get("gap_to_leader"),
-                "interval":      iv.get("interval"),
+                "date_dt": dt, "driver_number": int(iv.get("driver_number", 0)),
+                "gap_to_leader": iv.get("gap_to_leader"), "interval": iv.get("interval"),
             })
         self.interval_events.sort(key=lambda x: x["date_dt"])
         self._int_dates = [e["date_dt"] for e in self.interval_events]
-        print(f"✅ Loaded {len(self.interval_events)} interval events.")
+        print(f"  ✅ Loaded {len(self.interval_events)} interval events.")
 
     def update(self, current_dt):
         if current_dt is None or not self.position_events:
@@ -231,8 +186,7 @@ class RaceStandingsManager:
         for ev in self.position_events[:cutoff]:
             latest_pos[ev["driver_number"]] = ev["position"]
 
-        latest_gap = {}
-        latest_interval = {}
+        latest_gap = {}; latest_interval = {}
         for ev in self.interval_events[:cutoff_int]:
             latest_gap[ev["driver_number"]]      = ev["gap_to_leader"]
             latest_interval[ev["driver_number"]] = ev["interval"]
@@ -244,43 +198,32 @@ class RaceStandingsManager:
         for dn, pos in latest_pos.items():
             driver_info = self.driver_map.get(dn, {})
             standings.append({
-                "position":      pos,
-                "driver_number": dn,
-                "acronym":       driver_info.get("acronym", f"#{dn}"),
-                "team_colour":   driver_info.get("team_colour", "FFFFFF"),
-                "gap_to_leader": latest_gap.get(dn),
-                "interval":      latest_interval.get(dn),
+                "position": pos, "driver_number": dn,
+                "acronym": driver_info.get("acronym", f"#{dn}"),
+                "team_colour": driver_info.get("team_colour", "FFFFFF"),
+                "gap_to_leader": latest_gap.get(dn), "interval": latest_interval.get(dn),
             })
         standings.sort(key=lambda x: x["position"])
         self.current_standings = standings
 
     def format_gap(self, gap):
-        if gap is None:
-            return "LEAD"
-        if isinstance(gap, str):
-            return gap
+        if gap is None: return "LEAD"
+        if isinstance(gap, str): return gap
         try:
             v = float(gap)
-            if v == 0:
-                return "LEAD"
-            m = int(abs(v) // 60)
-            s = abs(v) % 60
+            if v == 0: return "LEAD"
+            m = int(abs(v) // 60); s = abs(v) % 60
             return f"+{m}:{s:05.3f}" if m > 0 else f"+{s:.3f}"
         except Exception:
             return str(gap)
 
     def get_display(self):
-        return [
-            {
-                "position":      e["position"],
-                "driver_number": e["driver_number"],
-                "acronym":       e["acronym"],
-                "team_colour":   e["team_colour"],
-                "gap":           self.format_gap(e["gap_to_leader"]),
-                "interval":      self.format_gap(e["interval"]),
-            }
-            for e in self.current_standings
-        ]
+        return [{
+            "position": e["position"], "driver_number": e["driver_number"],
+            "acronym": e["acronym"], "team_colour": e["team_colour"],
+            "gap": self.format_gap(e["gap_to_leader"]),
+            "interval": self.format_gap(e["interval"]),
+        } for e in self.current_standings]
 
 
 # ---------------------------------------------------------------------------
@@ -301,13 +244,17 @@ class DriverDataCache:
         self.global_best_sectors = {1: None, 2: None, 3: None}
 
 
+# ---------------------------------------------------------------------------
+# Main Connector
+# ---------------------------------------------------------------------------
+
 class OpenF1Connector:
     def __init__(self):
         self.base_url      = "https://api.openf1.org/v1"
         self.session_key   = None
-        self.driver_number = '16'
-        self.driver_acronym = 'LEC'
-        self.driver_team_colour = 'E8002D'
+        self.driver_number = '1'
+        self.driver_acronym = '---'
+        self.driver_team_colour = 'FFFFFF'
 
         self.driver_caches = {}
 
@@ -332,18 +279,13 @@ class OpenF1Connector:
         self.current_index = 0
         self.track_layout  = []
         self.track_rotation = 0.0
-        self.mode = "SIMULATION"
-        self.sim_pos = 0.0
 
         self.norm_min_x = 0; self.norm_max_x = 1000
         self.norm_min_y = 0; self.norm_max_y = 1000
 
-        self.sim_track = SIMULATION_TRACK
-
         self.circuit_name = "Unknown Circuit"
         self.session_type = "Unknown"
         self.total_laps   = 0
-        self.simulated_lap_number = 1
 
         self.replay_speed      = 1.0
         self.replay_wall_start = None
@@ -358,33 +300,46 @@ class OpenF1Connector:
         self._standings_update_interval = 4.0
         self._current_replay_dt        = None
 
-        self._switching_driver = False
-
     # ------------------------------------------------------------------
-    def initialize_session(self):
-        print("🔄 Connecting to OpenF1 API...")
+    # Session loading (called from /api/replay/load)
+    # ------------------------------------------------------------------
+
+    def reinitialize_session(self, session_key):
+        print(f"\n🔄 Loading session_key={session_key}...")
         headers = {"User-Agent": "Mozilla/5.0"}
 
         try:
             req = requests.Request('GET', f"{self.base_url}/sessions",
-                                   params={'year': 2024}, headers=headers).prepare()
+                                   params={'session_key': session_key}, headers=headers).prepare()
             resp = requests.get(req.url, timeout=10, verify=False)
             if resp.status_code != 200:
-                raise Exception("Session fetch failed")
+                return False, "Failed to fetch session"
 
-            sessions = [s for s in resp.json() if s.get('session_type') == 'Race']
+            sessions = resp.json()
             if not sessions:
-                raise Exception("No race sessions found")
+                return False, "Session not found"
 
-            target = sessions[11]
+            target = sessions[0]
             self.session_key  = target['session_key']
             meeting_key       = target.get('meeting_key')
             self.circuit_name = target.get('circuit_short_name', target.get('location', 'Unknown Circuit'))
-            self.session_type = target.get('session_type', 'Race')
+            self.session_type = target.get('session_type', 'Unknown')
             self.session_start_dt = parse_dt(target.get('date_start', ''))
-            print(f"✅ Selected: {self.circuit_name} ({self.session_type}) - Session Key: {self.session_key}")
 
-            # Official track
+            # Reset everything
+            self.driver_caches = {}
+            self.race_control_cache = []
+            self.weather_cache = []
+            self.weather_dates = []
+            self.flag_timeline = []
+            self.flag_timeline_dates = []
+            self.total_laps = 0
+            self._current_replay_dt = None
+            self._last_standings_update = None
+
+            print(f"  ✅ Session: {self.circuit_name} ({self.session_type}) - Key: {self.session_key}")
+
+            # Track layout
             official_loaded = False
             if meeting_key:
                 try:
@@ -400,17 +355,16 @@ class OpenF1Connector:
                                 circuit_data = info_resp.json()
                                 if 'x' in circuit_data and 'y' in circuit_data:
                                     self.track_layout = list(zip(circuit_data['x'], circuit_data['y']))
-                                    official_loaded   = True
+                                    official_loaded = True
                                     self.track_rotation = float(circuit_data.get('rotation', 0) or 0)
-                                    print(f"✅ Official Track: {len(self.track_layout)} pts, rotation={self.track_rotation}°")
+                                    print(f"  ✅ Track: {len(self.track_layout)} pts, rotation={self.track_rotation}°")
                 except Exception as e:
-                    print(f"⚠️ Official track failed: {e}")
+                    print(f"  ⚠️ Track layout: {e}")
 
-            # Shared data
+            # Fetch shared data
             def fetch_live(endpoint, params=None):
                 fp = {'session_key': self.session_key}
-                if params:
-                    fp.update(params)
+                if params: fp.update(params)
                 r = requests.Request('GET', f"{self.base_url}/{endpoint}",
                                      params=fp, headers=headers).prepare()
                 res = requests.get(r.url, timeout=15, verify=False)
@@ -419,19 +373,14 @@ class OpenF1Connector:
             race_control = fetch_live("race_control")
             weather_raw  = fetch_live("weather")
 
-            # Get total laps from race leader's laps (driver #1 position)
+            # Total laps
             try:
-                leader_laps = fetch_live("laps", {'driver_number': 1})
-                if leader_laps:
-                    self.total_laps = max(int(l.get('lap_number', 0)) for l in leader_laps if l.get('lap_number'))
-                if self.total_laps == 0:
-                    # Fallback: try any driver
-                    all_laps_sample = fetch_live("laps", {'driver_number': self.driver_number})
-                    if all_laps_sample:
-                        self.total_laps = max(int(l.get('lap_number', 0)) for l in all_laps_sample if l.get('lap_number'))
+                sample_laps = fetch_live("laps", {'driver_number': 1})
+                if sample_laps:
+                    self.total_laps = max(int(l.get('lap_number', 0)) for l in sample_laps if l.get('lap_number'))
             except Exception:
                 self.total_laps = 0
-            print(f"🏁 Total laps: {self.total_laps}")
+            print(f"  🏁 Total laps: {self.total_laps}")
 
             # Race control
             self.race_control_cache = []
@@ -441,11 +390,10 @@ class OpenF1Connector:
                     rc['_dt'] = dt
                     self.race_control_cache.append(rc)
             self.race_control_cache.sort(key=lambda x: x['_dt'])
-            print(f"✅ Loaded {len(self.race_control_cache)} race control messages.")
+            print(f"  ✅ Race control: {len(self.race_control_cache)} messages")
 
-            self.flag_timeline       = build_flag_timeline(self.race_control_cache)
+            self.flag_timeline = build_flag_timeline(self.race_control_cache)
             self.flag_timeline_dates = [e[0] for e in self.flag_timeline]
-            print(f"🏴 Flag timeline: {len(self.flag_timeline)} status changes.")
 
             # Weather
             self.weather_cache = []
@@ -456,13 +404,26 @@ class OpenF1Connector:
                     self.weather_cache.append(w)
             self.weather_cache.sort(key=lambda x: x['_dt'])
             self.weather_dates = [w['_dt'] for w in self.weather_cache]
-            print(f"🌤️ Loaded {len(self.weather_cache)} weather samples.")
+            print(f"  🌤️ Weather: {len(self.weather_cache)} samples")
 
             # Standings
+            self.standings_manager = RaceStandingsManager()
             self.standings_manager.load(self.session_key, headers)
 
-            # Load initial driver
-            self._load_driver_data(int(self.driver_number), headers, official_loaded)
+            # Find first available driver
+            available_drivers = list(self.standings_manager.driver_map.keys())
+            if not available_drivers:
+                return False, "No drivers found in session"
+
+            # Load driver data (try first few until one works)
+            success = False
+            for dn in available_drivers[:10]:
+                if self._load_driver_data(dn, headers, official_loaded):
+                    success = True
+                    break
+
+            if not success:
+                return False, "Could not load any driver data"
 
             # Normalisation bounds
             points = self.track_layout if official_loaded else [(p['x'], p['y']) for p in self.location_cache]
@@ -485,18 +446,15 @@ class OpenF1Connector:
                     if coord not in seen:
                         self.track_layout.append(coord); seen.add(coord)
 
-            self.mode = "OPENF1"
             self.current_index = 0
             self._reset_replay_clock()
-            print("🏎️ MODE: REAL DATA")
+
+            print(f"  🏎️ Ready: {self.circuit_name} {self.session_type} — tracking {self.driver_acronym}\n")
+            return True, f"Loaded {self.circuit_name} — {self.session_type}"
 
         except Exception as e:
-            print(f"❌ Error: {e}")
-            self.mode = "SIMULATION"
-            self.track_layout  = SIMULATION_TRACK
-            self.circuit_name  = "Simulation / Error"
-            self.session_type  = "Test"
-            self.track_rotation = 0.0
+            print(f"  ❌ Error: {e}")
+            return False, str(e)
 
     # ------------------------------------------------------------------
     # Driver data loading
@@ -510,12 +468,11 @@ class OpenF1Connector:
         if headers is None:
             headers = {"User-Agent": "Mozilla/5.0"}
 
-        print(f"📡 Fetching data for driver #{driver_num}...")
+        print(f"  📡 Fetching driver #{driver_num}...")
 
         def fetch_live(endpoint, params=None):
             fp = {'session_key': self.session_key}
-            if params:
-                fp.update(params)
+            if params: fp.update(params)
             r = requests.Request('GET', f"{self.base_url}/{endpoint}",
                                  params=fp, headers=headers).prepare()
             res = requests.get(r.url, timeout=15, verify=False)
@@ -527,10 +484,10 @@ class OpenF1Connector:
         stints    = fetch_live("stints",    {'driver_number': driver_num})
 
         if not locations or not car_data:
-            print(f"⚠️ No data for driver #{driver_num}")
+            print(f"  ⚠️ No data for driver #{driver_num}")
             return False
 
-        # Sync
+        # Sync location <-> car_data
         car_dates = [parse_dt(c.get('date', '')) for c in car_data]
         synced_locations, synced_car = [], []
         search_start = 0
@@ -543,8 +500,7 @@ class OpenF1Connector:
             window_start = max(0, search_start - 2)
             window_end   = min(len(car_data), window_start + 25)
             for i in range(window_start, window_end):
-                if car_dates[i] is None:
-                    continue
+                if car_dates[i] is None: continue
                 delta = abs((loc_dt - car_dates[i]).total_seconds())
                 if delta < best_delta:
                     best_delta = delta; best_idx = i
@@ -555,6 +511,7 @@ class OpenF1Connector:
                 synced_car.append(car_data[best_idx])
                 search_start = best_idx
 
+        # Fast-forward to session start
         start_idx = 0
         if self.session_start_dt:
             for i, c in enumerate(synced_car):
@@ -566,9 +523,10 @@ class OpenF1Connector:
         final_car       = synced_car[start_idx:]
 
         if len(final_car) < 2:
-            print(f"⚠️ Not enough samples for driver #{driver_num}")
+            print(f"  ⚠️ Not enough samples for driver #{driver_num}")
             return False
 
+        # Build cache
         cache = DriverDataCache()
         cache.location_cache = final_locations
         cache.car_data_cache = final_car
@@ -586,21 +544,21 @@ class OpenF1Connector:
             ln = lap.get('lap_number')
             if ln is not None:
                 try: cache.lap_by_number[int(ln)] = lap
-                except Exception: pass
+                except: pass
         boundaries.sort(key=lambda x: x[0])
         cache.lap_boundaries  = boundaries
         cache.lap_start_dates = [b[0] for b in boundaries]
 
         bests = {1: None, 2: None, 3: None}
         for lap in laps:
-            for sn, field in [(1, 'duration_sector_1'), (2, 'duration_sector_2'), (3, 'duration_sector_3')]:
+            for sn, field in [(1,'duration_sector_1'),(2,'duration_sector_2'),(3,'duration_sector_3')]:
                 val = safe_float(lap.get(field), 0.0)
                 if val > 0 and (bests[sn] is None or val < bests[sn]):
                     bests[sn] = val
         cache.global_best_sectors = bests
 
         self.driver_caches[driver_num] = cache
-        print(f"✅ Cached driver #{driver_num}: {cache.total_samples} samples, {len(stints)} stints.")
+        print(f"  ✅ Cached #{driver_num}: {cache.total_samples} samples, {len(stints)} stints")
 
         self._activate_driver_cache(driver_num)
         return True
@@ -624,23 +582,19 @@ class OpenF1Connector:
         driver_info = self.standings_manager.driver_map.get(driver_num, {})
         self.driver_acronym     = driver_info.get('acronym', f'#{driver_num}')
         self.driver_team_colour = driver_info.get('team_colour', 'FFFFFF')
-        print(f"🔄 Active driver: {self.driver_acronym} (#{driver_num})")
 
     def switch_driver(self, driver_num):
         driver_num = int(driver_num)
         if str(driver_num) == str(self.driver_number):
             return True, f"Already tracking #{driver_num}"
-        if self.mode != "OPENF1":
-            return False, "Not in OPENF1 mode"
+        if self.session_key is None:
+            return False, "No session loaded"
 
         _, _, _, current_target_dt = self._get_replay_state()
 
-        self._switching_driver = True
         success = self._load_driver_data(driver_num)
-        self._switching_driver = False
-
         if not success:
-            return False, f"No data available for driver #{driver_num}"
+            return False, f"No data for driver #{driver_num}"
 
         if current_target_dt and self.sample_dates:
             valid_dates = [dt for dt in self.sample_dates if dt is not None]
@@ -670,11 +624,12 @@ class OpenF1Connector:
 
     def _get_replay_state(self):
         if not self.sample_dates or not self.replay_data_start:
-            return self.current_index, self.current_index, 0.0, None
+            return 0, 0, 0.0, None
         elapsed_wall = (time.monotonic() - self.replay_wall_start) * self.replay_speed
         target_dt    = self.replay_data_start + timedelta(seconds=elapsed_wall)
         if self.replay_data_end and target_dt >= self.replay_data_end:
-            self._reset_replay_clock(); target_dt = self.replay_data_start
+            self._reset_replay_clock()
+            target_dt = self.replay_data_start
 
         idx1 = bisect_right(self.sample_dates, target_dt)
         if idx1 <= 0:
@@ -707,17 +662,14 @@ class OpenF1Connector:
         if curr_dt is None or not self.weather_cache:
             return default
         idx = bisect_right(self.weather_dates, curr_dt) - 1
-        if idx < 0:
-            return default
+        if idx < 0: return default
         w = self.weather_cache[idx]
         return {
-            "air_temperature":   w.get("air_temperature"),
+            "air_temperature": w.get("air_temperature"),
             "track_temperature": w.get("track_temperature"),
-            "humidity":          w.get("humidity"),
-            "pressure":          w.get("pressure"),
-            "wind_speed":        w.get("wind_speed"),
-            "wind_direction":    w.get("wind_direction"),
-            "rainfall":          w.get("rainfall", 0),
+            "humidity": w.get("humidity"), "pressure": w.get("pressure"),
+            "wind_speed": w.get("wind_speed"), "wind_direction": w.get("wind_direction"),
+            "rainfall": w.get("rainfall", 0),
         }
 
     # ------------------------------------------------------------------
@@ -725,32 +677,21 @@ class OpenF1Connector:
     # ------------------------------------------------------------------
 
     def _get_current_stint(self, lap_num):
-        """Return current stint info based on lap number."""
         if not self.stints_cache:
             return {"compound": "UNKNOWN", "tyre_age": 0, "stint_number": 0}
-
         current_stint = None
         for stint in self.stints_cache:
             lap_start = stint.get('lap_start', 0) or 0
-            lap_end   = stint.get('lap_end')
-            if lap_end is None:
-                lap_end = 9999
+            lap_end   = stint.get('lap_end') or 9999
             if lap_start <= lap_num <= lap_end:
-                current_stint = stint
-                break
-
+                current_stint = stint; break
         if current_stint is None and self.stints_cache:
             current_stint = self.stints_cache[-1]
-
         if current_stint:
             compound = (current_stint.get('compound') or 'UNKNOWN').upper()
             lap_start = current_stint.get('lap_start', 1) or 1
             tyre_age = max(0, lap_num - lap_start + 1)
-            return {
-                "compound":     compound,
-                "tyre_age":     tyre_age,
-                "stint_number": current_stint.get('stint_number', 1),
-            }
+            return {"compound": compound, "tyre_age": tyre_age, "stint_number": current_stint.get('stint_number', 1)}
         return {"compound": "UNKNOWN", "tyre_age": 0, "stint_number": 0}
 
     # ------------------------------------------------------------------
@@ -758,8 +699,7 @@ class OpenF1Connector:
     # ------------------------------------------------------------------
 
     def _find_current_lap_by_dt(self, curr_dt):
-        if not self.lap_boundaries or curr_dt is None:
-            return None
+        if not self.lap_boundaries or curr_dt is None: return None
         idx = bisect_right(self.lap_start_dates, curr_dt) - 1
         return None if idx < 0 else self.lap_boundaries[idx][1]
 
@@ -769,7 +709,7 @@ class OpenF1Connector:
             n = lap.get('lap_number')
             if n is None: continue
             try: n = int(n)
-            except Exception: continue
+            except: continue
             if n >= lap_num: continue
             val = safe_float(lap.get(field), 0.0)
             if val > 0 and (best is None or val < best): best = val
@@ -777,8 +717,8 @@ class OpenF1Connector:
 
     def _sector_color(self, lap_num, sector_num, value):
         if not value or value <= 0: return None
-        gb  = self.global_best_sectors.get(sector_num)
-        pb  = self._previous_personal_best(lap_num, sector_num)
+        gb = self.global_best_sectors.get(sector_num)
+        pb = self._previous_personal_best(lap_num, sector_num)
         eps = 0.001
         if gb is not None and abs(value - gb) <= eps: return "purple"
         if pb is None or value < pb - eps: return "green"
@@ -787,15 +727,14 @@ class OpenF1Connector:
     def _format_completed_lap(self, lap):
         if not lap: return None
         lap_num = int(lap.get('lap_number', 1))
-        s1  = safe_float(lap.get('duration_sector_1'), 0.0)
-        s2  = safe_float(lap.get('duration_sector_2'), 0.0)
-        s3  = safe_float(lap.get('duration_sector_3'), 0.0)
+        s1 = safe_float(lap.get('duration_sector_1'), 0.0)
+        s2 = safe_float(lap.get('duration_sector_2'), 0.0)
+        s3 = safe_float(lap.get('duration_sector_3'), 0.0)
         tot = safe_float(lap.get('lap_duration'), 0.0)
         if s3 <= 0 and tot > 0 and s1 > 0 and s2 > 0:
             s3 = max(0.0, tot - s1 - s2)
         return {
-            "lap": lap_num,
-            "sector_1": s1, "sector_2": s2, "sector_3": s3, "lap_time": tot,
+            "lap": lap_num, "sector_1": s1, "sector_2": s2, "sector_3": s3, "lap_time": tot,
             "sector_1_color": self._sector_color(lap_num, 1, s1),
             "sector_2_color": self._sector_color(lap_num, 2, s2),
             "sector_3_color": self._sector_color(lap_num, 3, s3),
@@ -807,45 +746,26 @@ class OpenF1Connector:
 
     def _race_control_status(self, curr_dt):
         default = {"label": "GREEN FLAG", "type": "green", "message": "Track clear", "flag": "GREEN"}
-        if curr_dt is None or not self.flag_timeline:
-            return default
-
+        if curr_dt is None or not self.flag_timeline: return default
         idx = bisect_right(self.flag_timeline_dates, curr_dt) - 1
-        if idx < 0:
-            return default
+        if idx < 0: return default
 
         dt, label, type_, scope, rc = self.flag_timeline[idx]
 
-        # If last event is a sector GREEN, look backwards for active track-level status
         if type_ == "green" and scope == "sector":
             for i in range(idx - 1, -1, -1):
                 _, _, prev_type, prev_scope, prev_rc = self.flag_timeline[i]
                 if prev_scope == "track":
                     if prev_type != "green":
-                        # Track-level non-green still active
-                        return {
-                            "label": self.flag_timeline[i][1],
-                            "type": prev_type,
-                            "message": prev_rc.get('message') or self.flag_timeline[i][1],
-                            "flag": prev_rc.get('flag'),
-                        }
-                    else:
-                        break  # Track-level green found → all clear
+                        return {"label": self.flag_timeline[i][1], "type": prev_type,
+                                "message": prev_rc.get('message') or self.flag_timeline[i][1], "flag": prev_rc.get('flag')}
+                    else: break
                 if prev_type in ("red", "safety_car", "vsc"):
-                    return {
-                        "label": self.flag_timeline[i][1],
-                        "type": prev_type,
-                        "message": prev_rc.get('message') or self.flag_timeline[i][1],
-                        "flag": prev_rc.get('flag'),
-                    }
+                    return {"label": self.flag_timeline[i][1], "type": prev_type,
+                            "message": prev_rc.get('message') or self.flag_timeline[i][1], "flag": prev_rc.get('flag')}
             return default
 
-        return {
-            "label":   label,
-            "type":    type_,
-            "message": rc.get('message') or label,
-            "flag":    rc.get('flag'),
-        }
+        return {"label": label, "type": type_, "message": rc.get('message') or label, "flag": rc.get('flag')}
 
     # ------------------------------------------------------------------
     # Normalisation
@@ -866,160 +786,112 @@ class OpenF1Connector:
     # ------------------------------------------------------------------
 
     def get_next_telemetry(self):
-        if self.mode == "OPENF1" and self.total_samples > 0:
-            idx0, idx1, alpha, target_dt = self._get_replay_state()
-            self._current_replay_dt = target_dt
+        if self.session_key is None or self.total_samples == 0:
+            return None
 
-            now = time.monotonic()
-            if (self._last_standings_update is None or
-                    now - self._last_standings_update >= self._standings_update_interval):
-                self.standings_manager.update(target_dt)
-                self._last_standings_update = now
+        idx0, idx1, alpha, target_dt = self._get_replay_state()
+        self._current_replay_dt = target_dt
 
-            car0, car1 = self.car_data_cache[idx0], self.car_data_cache[idx1]
-            loc0, loc1 = self.location_cache[idx0], self.location_cache[idx1]
+        now = time.monotonic()
+        if (self._last_standings_update is None or
+                now - self._last_standings_update >= self._standings_update_interval):
+            self.standings_manager.update(target_dt)
+            self._last_standings_update = now
 
-            raw_x = lerp(safe_float(loc0.get('x')), safe_float(loc1.get('x')), alpha)
-            raw_y = lerp(safe_float(loc0.get('y')), safe_float(loc1.get('y')), alpha)
-            curr_x = self.normalize(raw_x, self.norm_min_x, self.norm_max_x)
-            curr_y = self.normalize(raw_y, self.norm_min_y, self.norm_max_y)
+        car0, car1 = self.car_data_cache[idx0], self.car_data_cache[idx1]
+        loc0, loc1 = self.location_cache[idx0], self.location_cache[idx1]
 
-            pi  = max(0, idx0 - 1); ni = min(self.total_samples - 1, idx1 + 1)
-            pp  = self.location_cache[pi];  pn = self.location_cache[ni]
-            px_ = self.normalize(pp['x'], self.norm_min_x, self.norm_max_x)
-            py_ = self.normalize(pp['y'], self.norm_min_y, self.norm_max_y)
-            nx_ = self.normalize(pn['x'], self.norm_min_x, self.norm_max_x)
-            ny_ = self.normalize(pn['y'], self.norm_min_y, self.norm_max_y)
-            steering = self.calculate_steering(curr_x, curr_y, px_, py_, nx_, ny_)
+        raw_x = lerp(safe_float(loc0.get('x')), safe_float(loc1.get('x')), alpha)
+        raw_y = lerp(safe_float(loc0.get('y')), safe_float(loc1.get('y')), alpha)
+        curr_x = self.normalize(raw_x, self.norm_min_x, self.norm_max_x)
+        curr_y = self.normalize(raw_y, self.norm_min_y, self.norm_max_y)
 
-            current_lap_data = self._find_current_lap_by_dt(target_dt)
-            completed_lap = None
+        pi = max(0, idx0 - 1); ni = min(self.total_samples - 1, idx1 + 1)
+        pp = self.location_cache[pi]; pn = self.location_cache[ni]
+        px_ = self.normalize(pp['x'], self.norm_min_x, self.norm_max_x)
+        py_ = self.normalize(pp['y'], self.norm_min_y, self.norm_max_y)
+        nx_ = self.normalize(pn['x'], self.norm_min_x, self.norm_max_x)
+        ny_ = self.normalize(pn['y'], self.norm_min_y, self.norm_max_y)
+        steering = self.calculate_steering(curr_x, curr_y, px_, py_, nx_, ny_)
 
-            if current_lap_data:
-                lap_num = int(current_lap_data.get('lap_number', 1))
-                if self.last_lap_num_seen is None:
-                    self.last_lap_num_seen = lap_num
-                elif lap_num != self.last_lap_num_seen:
-                    prev_lap = self.lap_by_number.get(self.last_lap_num_seen)
-                    completed_lap = self._format_completed_lap(prev_lap)
-                    self.last_lap_num_seen = lap_num
+        current_lap_data = self._find_current_lap_by_dt(target_dt)
+        completed_lap = None
 
-                s1o = safe_float(current_lap_data.get('duration_sector_1'), 0.0)
-                s2o = safe_float(current_lap_data.get('duration_sector_2'), 0.0)
-                s3o = safe_float(current_lap_data.get('duration_sector_3'), 0.0)
-                lto = safe_float(current_lap_data.get('lap_duration'), 0.0)
+        if current_lap_data:
+            lap_num = int(current_lap_data.get('lap_number', 1))
+            if self.last_lap_num_seen is None:
+                self.last_lap_num_seen = lap_num
+            elif lap_num != self.last_lap_num_seen:
+                prev_lap = self.lap_by_number.get(self.last_lap_num_seen)
+                completed_lap = self._format_completed_lap(prev_lap)
+                self.last_lap_num_seen = lap_num
 
-                start_dt = parse_dt(current_lap_data.get('date_start', ''))
-                elapsed  = max(0.0, (target_dt - start_dt).total_seconds()) if start_dt and target_dt else 0.0
-                lap_time = min(elapsed, lto) if lto > 0 else elapsed
+            s1o = safe_float(current_lap_data.get('duration_sector_1'), 0.0)
+            s2o = safe_float(current_lap_data.get('duration_sector_2'), 0.0)
+            s3o = safe_float(current_lap_data.get('duration_sector_3'), 0.0)
+            lto = safe_float(current_lap_data.get('lap_duration'), 0.0)
 
-                s1 = s2 = s3 = 0.0; s1c = s2c = s3c = None; eps = 0.10
-                if s1o > 0 and elapsed >= s1o - eps:
-                    s1 = s1o; s1c = self._sector_color(lap_num, 1, s1)
-                if s1o > 0 and s2o > 0 and elapsed >= s1o + s2o - eps:
-                    s2 = s2o; s2c = self._sector_color(lap_num, 2, s2)
-                if lto > 0 and elapsed >= lto - eps:
-                    s3 = s3o if s3o > 0 else max(0.0, lto - s1o - s2o)
-                    s3c = self._sector_color(lap_num, 3, s3)
+            start_dt = parse_dt(current_lap_data.get('date_start', ''))
+            elapsed = max(0.0, (target_dt - start_dt).total_seconds()) if start_dt and target_dt else 0.0
+            lap_time = min(elapsed, lto) if lto > 0 else elapsed
 
-                if lto > 0 and elapsed >= lto - eps:   current_sector = 4
-                elif s1 > 0 and s2 > 0:                current_sector = 3
-                elif s1 > 0:                            current_sector = 2
-                else:                                   current_sector = 1
-            else:
-                lap_num = 1; s1 = s2 = s3 = 0.0; lap_time = 0.0
-                current_sector = 1; s1c = s2c = s3c = None
+            s1 = s2 = s3 = 0.0; s1c = s2c = s3c = None; eps = 0.10
+            if s1o > 0 and elapsed >= s1o - eps:
+                s1 = s1o; s1c = self._sector_color(lap_num, 1, s1)
+            if s1o > 0 and s2o > 0 and elapsed >= s1o + s2o - eps:
+                s2 = s2o; s2c = self._sector_color(lap_num, 2, s2)
+            if lto > 0 and elapsed >= lto - eps:
+                s3 = s3o if s3o > 0 else max(0.0, lto - s1o - s2o)
+                s3c = self._sector_color(lap_num, 3, s3)
 
-            # Tyre stint info
-            stint_info = self._get_current_stint(lap_num)
-
-            return {
-                "x": curr_x, "y": curr_y,
-                "speed":    self._interpolate_numeric(car0, car1, 'speed', alpha),
-                "gear":     car0.get('n_gear', 0),
-                "rpm":      self._interpolate_numeric(car0, car1, 'rpm', alpha),
-                "throttle": self._interpolate_numeric(car0, car1, 'throttle', alpha),
-                "brake":    self._interpolate_numeric(car0, car1, 'brake', alpha),
-                "steering": steering,
-                "lap": lap_num, "total_laps": self.total_laps, "lap_time": lap_time,
-                "sector_1": s1, "sector_2": s2, "sector_3": s3,
-                "sector_1_color": s1c, "sector_2_color": s2c, "sector_3_color": s3c,
-                "date": target_dt.isoformat() if target_dt else car0.get('date', ''),
-                "current_sector": current_sector,
-                "completed_lap": completed_lap,
-                "race_control": self._race_control_status(target_dt),
-                "weather": self._get_weather_at(target_dt),
-                "driver_acronym": self.driver_acronym,
-                "driver_team_colour": self.driver_team_colour,
-                "driver_number": int(self.driver_number),
-                "tyre_compound": stint_info["compound"],
-                "tyre_age":      stint_info["tyre_age"],
-                "stint_number":  stint_info["stint_number"],
-                "mode": "OPENF1",
-            }
+            if lto > 0 and elapsed >= lto - eps:   current_sector = 4
+            elif s1 > 0 and s2 > 0:                current_sector = 3
+            elif s1 > 0:                            current_sector = 2
+            else:                                   current_sector = 1
         else:
-            # Simulation mode (unchanged structure, just add new fields)
-            if not self.sim_track:
-                return {"x": 500, "y": 500, "speed": 0, "gear": 0, "rpm": 0,
-                        "throttle": 0, "brake": 0, "steering": 0, "lap": 1, "total_laps": 50,
-                        "lap_time": 0, "sector_1": 0, "sector_2": 0, "sector_3": 0,
-                        "sector_1_color": None, "sector_2_color": None, "sector_3_color": None,
-                        "date": "", "current_sector": 1, "completed_lap": None,
-                        "race_control": {"label": "GREEN FLAG", "type": "green", "message": "Sim"},
-                        "weather": {"air_temperature": 25, "track_temperature": 35,
-                                    "humidity": 60, "pressure": 1013, "wind_speed": 2,
-                                    "wind_direction": 180, "rainfall": 0},
-                        "driver_acronym": "SIM", "driver_team_colour": "FFFFFF",
-                        "driver_number": 0, "tyre_compound": "MEDIUM", "tyre_age": 5,
-                        "stint_number": 1, "mode": "SIM"}
+            lap_num = 1; s1 = s2 = s3 = 0.0; lap_time = 0.0
+            current_sector = 1; s1c = s2c = s3c = None
 
-            idx  = int(self.sim_pos); ni = (idx + 1) % len(self.sim_track)
-            p1, p2 = self.sim_track[idx], self.sim_track[ni]
-            dx, dy = p2[0] - p1[0], p2[1] - p1[1]
-            dist   = math.sqrt(dx * dx + dy * dy) or 1
-            speed  = 15 + 10 * math.sin(self.sim_pos / 5)
-            self.sim_pos += speed / dist
-            if self.sim_pos >= len(self.sim_track):
-                self.sim_pos = 0.0; self.simulated_lap_number += 1
-            sim_time = (self.sim_pos * 0.5) % 100
-            return {
-                "x": p1[0] + (dx * (self.sim_pos - idx)),
-                "y": p1[1] + (dy * (self.sim_pos - idx)),
-                "speed": speed * 12, "gear": min(8, max(1, int(speed))),
-                "rpm": int(speed * 100),
-                "throttle": 80 if dist > 50 else 30, "brake": 0 if dist > 50 else 50,
-                "steering": dx, "lap": self.simulated_lap_number, "total_laps": 50,
-                "lap_time": sim_time,
-                "sector_1": 25.4, "sector_2": 0.0, "sector_3": 0.0,
-                "sector_1_color": "green", "sector_2_color": None, "sector_3_color": None,
-                "date": "", "current_sector": 2 if sim_time > 25.4 else 1,
-                "completed_lap": None,
-                "race_control": {"label": "GREEN FLAG", "type": "green", "message": "Sim"},
-                "weather": {"air_temperature": 25, "track_temperature": 35,
-                            "humidity": 60, "pressure": 1013, "wind_speed": 2,
-                            "wind_direction": 180, "rainfall": 0},
-                "driver_acronym": "SIM", "driver_team_colour": "FFFFFF",
-                "driver_number": 0, "tyre_compound": "MEDIUM", "tyre_age": 5,
-                "stint_number": 1, "mode": "SIM",
-            }
+        stint_info = self._get_current_stint(lap_num)
+
+        return {
+            "x": curr_x, "y": curr_y,
+            "speed":    self._interpolate_numeric(car0, car1, 'speed', alpha),
+            "gear":     car0.get('n_gear', 0),
+            "rpm":      self._interpolate_numeric(car0, car1, 'rpm', alpha),
+            "throttle": self._interpolate_numeric(car0, car1, 'throttle', alpha),
+            "brake":    self._interpolate_numeric(car0, car1, 'brake', alpha),
+            "drs":      car0.get('drs', 0),
+            "steering": steering,
+            "lap": lap_num, "total_laps": self.total_laps, "lap_time": lap_time,
+            "sector_1": s1, "sector_2": s2, "sector_3": s3,
+            "sector_1_color": s1c, "sector_2_color": s2c, "sector_3_color": s3c,
+            "date": target_dt.isoformat() if target_dt else car0.get('date', ''),
+            "current_sector": current_sector,
+            "completed_lap": completed_lap,
+            "race_control": self._race_control_status(target_dt),
+            "weather": self._get_weather_at(target_dt),
+            "driver_acronym": self.driver_acronym,
+            "driver_team_colour": self.driver_team_colour,
+            "driver_number": int(self.driver_number),
+            "tyre_compound": stint_info["compound"],
+            "tyre_age": stint_info["tyre_age"],
+            "stint_number": stint_info["stint_number"],
+        }
 
     def get_race_positions(self):
-        if self.mode == "OPENF1":
-            self.standings_manager.update(self._current_replay_dt)
-            return self.standings_manager.get_display()
-        return [
-            {"position": 1, "driver_number": 1,  "acronym": "VER", "team_colour": "3671C6", "gap": "LEAD",   "interval": "LEAD"},
-            {"position": 2, "driver_number": 44, "acronym": "HAM", "team_colour": "27F4D2", "gap": "+1.234", "interval": "+1.234"},
-            {"position": 3, "driver_number": 16, "acronym": "LEC", "team_colour": "E8002D", "gap": "+2.567", "interval": "+1.333"},
-        ]
+        if self.session_key is None:
+            return []
+        self.standings_manager.update(self._current_replay_dt)
+        return self.standings_manager.get_display()
 
 
 # ---------------------------------------------------------------------------
-# Bootstrap
+# No session loaded at startup — user selects from frontend
 # ---------------------------------------------------------------------------
 
 connector = OpenF1Connector()
-connector.initialize_session()
+print("🏁 Server ready — waiting for session selection from frontend.\n")
 
 
 def get_db():
@@ -1049,7 +921,9 @@ def format_time(seconds):
 @app.route('/api/telemetry', methods=['GET'])
 def get_telemetry():
     data = connector.get_next_telemetry()
-    # Tyre temps: simulated from speed + compound-based base
+    if data is None:
+        return jsonify({"error": "No session loaded"}), 503
+
     compound = data.get('tyre_compound', 'MEDIUM')
     base_map = {"SOFT": 95, "MEDIUM": 90, "HARD": 85, "INTERMEDIATE": 65, "WET": 50}
     base_temp = base_map.get(compound, 90) + (data.get('speed', 0) / 15)
@@ -1070,17 +944,17 @@ def get_race_positions():
 
 @app.route('/api/session-info', methods=['GET'])
 def get_session_info():
-    try:
-        return jsonify({
-            "circuit": connector.circuit_name,
-            "session_type": connector.session_type,
-            "driver_acronym": connector.driver_acronym,
-            "driver_number": int(connector.driver_number),
-            "driver_team_colour": connector.driver_team_colour,
-            "total_laps": connector.total_laps,
-        })
-    except Exception:
-        return jsonify({"circuit": "Unknown", "session_type": "Unknown"}), 200
+    if connector.session_key is None:
+        return jsonify({"circuit": None, "session_type": None, "active": False})
+    return jsonify({
+        "circuit": connector.circuit_name,
+        "session_type": connector.session_type,
+        "driver_acronym": connector.driver_acronym,
+        "driver_number": int(connector.driver_number),
+        "driver_team_colour": connector.driver_team_colour,
+        "total_laps": connector.total_laps,
+        "active": True,
+    })
 
 
 @app.route('/api/switch-driver', methods=['POST'])
@@ -1103,16 +977,14 @@ def switch_driver():
 
 @app.route('/api/track-layout', methods=['GET'])
 def get_track_layout():
-    points = connector.track_layout if connector.track_layout else SIMULATION_TRACK
-    if connector.mode == "OPENF1":
-        normalized = [
-            (connector.normalize(x, connector.norm_min_x, connector.norm_max_x),
-             connector.normalize(y, connector.norm_min_y, connector.norm_max_y))
-            for x, y in points
-        ]
-        svg_points = " ".join([f"{x},{y}" for x, y in normalized])
-    else:
-        svg_points = " ".join([f"{x},{y}" for x, y in points])
+    if connector.session_key is None or not connector.track_layout:
+        return jsonify({"points": "", "rotation": 0})
+    normalized = [
+        (connector.normalize(x, connector.norm_min_x, connector.norm_max_x),
+         connector.normalize(y, connector.norm_min_y, connector.norm_max_y))
+        for x, y in connector.track_layout
+    ]
+    svg_points = " ".join([f"{x},{y}" for x, y in normalized])
     return jsonify({"points": svg_points, "rotation": connector.track_rotation})
 
 
@@ -1126,9 +998,7 @@ def get_race_events():
         events_raw = list(reversed(connector.race_control_cache[:idx]))
         events = []
         for rc in events_raw[:50]:
-            category = rc.get('category', '')
-            message  = rc.get('message', '')
-            flag     = rc.get('flag', '')
+            category = rc.get('category', ''); flag = rc.get('flag', '')
             event_type = 'info'
             if category == 'Flag':
                 if 'RED' in (flag or '').upper(): event_type = 'red'
@@ -1144,7 +1014,7 @@ def get_race_events():
             elif category == 'CarEvent': event_type = 'car_event'
             events.append({
                 "date": rc.get('date', ''), "category": category, "flag": flag,
-                "message": message, "scope": rc.get('scope', ''),
+                "message": rc.get('message', ''), "scope": rc.get('scope', ''),
                 "sector": rc.get('sector'), "lap_number": rc.get('lap_number'),
                 "driver_number": rc.get('driver_number'), "type": event_type,
             })
@@ -1153,25 +1023,98 @@ def get_race_events():
         return jsonify({"events": [], "error": str(e)}), 200
 
 
+# --- Replay session selector ---
+
+@app.route('/api/replay/years', methods=['GET'])
+def replay_years():
+    return jsonify([2024, 2023, 2022, 2021, 2020])
+
+
+@app.route('/api/replay/meetings/<int:year>', methods=['GET'])
+def replay_meetings(year):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        req = requests.Request('GET', f"{connector.base_url}/meetings",
+                               params={'year': year}, headers=headers).prepare()
+        resp = requests.get(req.url, timeout=10, verify=False)
+        if resp.status_code != 200: return jsonify([])
+        meetings = resp.json()
+        result = []
+        for m in meetings:
+            result.append({
+                'meeting_key': m.get('meeting_key'),
+                'name': m.get('meeting_name', m.get('meeting_official_name', 'Unknown')),
+                'country': m.get('country_name', ''),
+                'circuit': m.get('circuit_short_name', ''),
+                'date_start': (m.get('date_start') or '')[:10],
+            })
+        result.sort(key=lambda x: x.get('date_start', ''))
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/replay/sessions/<int:meeting_key>', methods=['GET'])
+def replay_sessions(meeting_key):
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        req = requests.Request('GET', f"{connector.base_url}/sessions",
+                               params={'meeting_key': meeting_key}, headers=headers).prepare()
+        resp = requests.get(req.url, timeout=10, verify=False)
+        if resp.status_code != 200: return jsonify([])
+        sessions = resp.json()
+        result = []
+        for s in sessions:
+            result.append({
+                'session_key': s.get('session_key'),
+                'session_name': s.get('session_name', ''),
+                'session_type': s.get('session_type', ''),
+                'date_start': s.get('date_start', ''),
+            })
+        result.sort(key=lambda x: x.get('date_start', ''))
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/replay/load', methods=['POST'])
+def replay_load():
+    try:
+        body = request.get_json(force=True)
+        session_key = body.get('session_key')
+        if not session_key:
+            return jsonify({"success": False, "message": "Missing session_key"}), 400
+        success, message = connector.reinitialize_session(int(session_key))
+        return jsonify({
+            "success": success, "message": message,
+            "circuit": connector.circuit_name,
+            "session_type": connector.session_type,
+            "driver_acronym": connector.driver_acronym,
+            "driver_number": int(connector.driver_number),
+            "total_laps": connector.total_laps,
+        })
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+
+# --- Other existing routes ---
+
 @app.route('/api/historical', methods=['GET'])
 def get_historical_data():
     db = get_db(); cursor = db.cursor()
-    track_id  = request.args.get('track_id')
-    driver_id = request.args.get('driver_id')
+    track_id = request.args.get('track_id'); driver_id = request.args.get('driver_id')
     query = ("SELECT d.driver_name, d.team, t.track_name, r.lap_time_sec, r.year "
              "FROM results r JOIN drivers d ON r.driver_id = d.id "
              "JOIN tracks t ON r.track_id = t.id WHERE 1=1")
     params = []
-    if track_id:  query += " AND r.track_id = ?";  params.append(track_id)
+    if track_id: query += " AND r.track_id = ?"; params.append(track_id)
     if driver_id: query += " AND r.driver_id = ?"; params.append(driver_id)
     query += " ORDER BY r.lap_time_sec ASC"
     cursor.execute(query, params); rows = cursor.fetchall()
     results = [{'driver': r['driver_name'], 'team': r['team'], 'track': r['track_name'],
                 'time': format_time(r['lap_time_sec']), 'year': r['year'], 'is_live': False} for r in rows]
-    cursor.execute("SELECT id, track_name FROM tracks")
-    tracks = [{'id': t['id'], 'name': t['track_name']} for t in cursor.fetchall()]
-    cursor.execute("SELECT id, driver_name FROM drivers")
-    drivers = [{'id': d['id'], 'name': d['driver_name']} for d in cursor.fetchall()]
+    cursor.execute("SELECT id, track_name FROM tracks"); tracks = [{'id': t['id'], 'name': t['track_name']} for t in cursor.fetchall()]
+    cursor.execute("SELECT id, driver_name FROM drivers"); drivers = [{'id': d['id'], 'name': d['driver_name']} for d in cursor.fetchall()]
     return jsonify({'results': results, 'tracks': tracks, 'drivers': drivers})
 
 
@@ -1185,17 +1128,13 @@ def get_championship_data(year):
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
         sessions = []
-        req = requests.Request('GET', f"{connector.base_url}/sessions",
-                               params={'year': year, 'session_name': 'Race'}, headers=headers).prepare()
+        req = requests.Request('GET', f"{connector.base_url}/sessions", params={'year': year, 'session_name': 'Race'}, headers=headers).prepare()
         resp = requests.get(req.url, timeout=10, verify=False)
         if resp.status_code == 200: sessions = resp.json()
         if not sessions:
-            req = requests.Request('GET', f"{connector.base_url}/sessions",
-                                   params={'year': year}, headers=headers).prepare()
+            req = requests.Request('GET', f"{connector.base_url}/sessions", params={'year': year}, headers=headers).prepare()
             resp = requests.get(req.url, timeout=10, verify=False)
-            if resp.status_code == 200:
-                sessions = [s for s in resp.json()
-                            if s.get('session_type') == 'Race' or s.get('session_name') == 'Race']
+            if resp.status_code == 200: sessions = [s for s in resp.json() if s.get('session_type') == 'Race' or s.get('session_name') == 'Race']
         if not sessions: return jsonify({'year': year, 'races': []}), 200
         sessions.sort(key=lambda x: x.get('date_start', ''))
         races_list = []
@@ -1204,9 +1143,7 @@ def get_championship_data(year):
                 rn = s.get('meeting_name') or s.get('circuit_short_name') or s.get('country_name') or "Unknown GP"
                 cn = s.get('circuit_short_name') or ""
                 dn = f"{rn} ({cn})" if cn and rn != cn else rn
-                races_list.append({'session_key': s['session_key'], 'meeting_key': s.get('meeting_key', 0),
-                                   'name': dn, 'date': s.get('date_start', '')[:10],
-                                   'country': s.get('country_name', 'Unknown')})
+                races_list.append({'session_key': s['session_key'], 'meeting_key': s.get('meeting_key', 0), 'name': dn, 'date': s.get('date_start', '')[:10], 'country': s.get('country_name', 'Unknown')})
         return jsonify({'year': year, 'races': races_list})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -1216,20 +1153,17 @@ def get_championship_data(year):
 def get_race_result(session_key):
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        req_res = requests.Request('GET', f"{connector.base_url}/session_result",
-                                   params={'session_key': session_key}, headers=headers).prepare()
+        req_res = requests.Request('GET', f"{connector.base_url}/session_result", params={'session_key': session_key}, headers=headers).prepare()
         resp_res = requests.get(req_res.url, timeout=10, verify=False)
         if resp_res.status_code != 200: return jsonify({'results': []}), 500
         results = resp_res.json()
         if not results: return jsonify({'results': []}), 200
-        req_drv = requests.Request('GET', f"{connector.base_url}/drivers",
-                                   params={'session_key': session_key}, headers=headers).prepare()
+        req_drv = requests.Request('GET', f"{connector.base_url}/drivers", params={'session_key': session_key}, headers=headers).prepare()
         resp_drv = requests.get(req_drv.url, timeout=10, verify=False)
         driver_map = {}
         if resp_drv.status_code == 200:
             for d in resp_drv.json():
-                num = str(d.get('driver_number'))
-                name = d.get('full_name') or f"{d.get('first_name','')} {d.get('last_name','')}".strip()
+                num = str(d.get('driver_number')); name = d.get('full_name') or f"{d.get('first_name','')} {d.get('last_name','')}".strip()
                 if num and name: driver_map[num] = name
         enriched = []
         for r in results:
@@ -1245,40 +1179,33 @@ def get_race_result(session_key):
 def get_real_standings(year):
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        req = requests.Request('GET', f"{connector.base_url}/sessions",
-                               params={'year': year, 'session_type': 'Race'}, headers=headers).prepare()
+        req = requests.Request('GET', f"{connector.base_url}/sessions", params={'year': year, 'session_type': 'Race'}, headers=headers).prepare()
         resp = requests.get(req.url, timeout=10, verify=False)
         sessions = resp.json() if resp.status_code == 200 else []
         if not sessions:
-            req = requests.Request('GET', f"{connector.base_url}/sessions",
-                                   params={'year': year}, headers=headers).prepare()
+            req = requests.Request('GET', f"{connector.base_url}/sessions", params={'year': year}, headers=headers).prepare()
             resp = requests.get(req.url, timeout=10, verify=False)
-            sessions = [s for s in (resp.json() if resp.status_code == 200 else [])
-                        if s.get('session_type') == 'Race' or s.get('session_name') == 'Race']
+            sessions = [s for s in (resp.json() if resp.status_code == 200 else []) if s.get('session_type') == 'Race' or s.get('session_name') == 'Race']
         if not sessions: return jsonify({'standings': [], 'message': f"No data for {year}"}), 200
         sessions.sort(key=lambda x: x.get('date_start', ''))
         last_key = sessions[-1]['session_key']
-        stand_req = requests.Request('GET', f"{connector.base_url}/championship_drivers",
-                                     params={'session_key': last_key}, headers=headers).prepare()
+        stand_req = requests.Request('GET', f"{connector.base_url}/championship_drivers", params={'session_key': last_key}, headers=headers).prepare()
         stand_resp = requests.get(stand_req.url, timeout=10, verify=False)
         if stand_resp.status_code != 200: return jsonify({'standings': []}), 200
         data = stand_resp.json()
         if not isinstance(data, list): return jsonify({'standings': [], 'message': "Invalid format"}), 200
-        req_drv = requests.Request('GET', f"{connector.base_url}/drivers",
-                                   params={'session_key': last_key}, headers=headers).prepare()
+        req_drv = requests.Request('GET', f"{connector.base_url}/drivers", params={'session_key': last_key}, headers=headers).prepare()
         resp_drv = requests.get(req_drv.url, timeout=10, verify=False)
         driver_map = {}
         if resp_drv.status_code == 200:
             for d in resp_drv.json():
                 if isinstance(d, dict):
-                    num = str(d.get('driver_number'))
-                    name = d.get('full_name') or f"{d.get('first_name','')} {d.get('last_name','')}".strip()
+                    num = str(d.get('driver_number')); name = d.get('full_name') or f"{d.get('first_name','')} {d.get('last_name','')}".strip()
                     if num and name: driver_map[num] = name
         enriched = []
         for row in data:
             if not isinstance(row, dict): continue
-            row['driver_name'] = driver_map.get(str(row.get('driver_number', '')),
-                                                  f"Driver #{row.get('driver_number')}")
+            row['driver_name'] = driver_map.get(str(row.get('driver_number', '')), f"Driver #{row.get('driver_number')}")
             enriched.append(row)
         enriched.sort(key=lambda x: x.get('position_current', 99))
         return jsonify({'standings': enriched})
@@ -1289,20 +1216,14 @@ def get_real_standings(year):
 @app.route('/api/live-stream', methods=['GET'])
 def get_live_stream():
     db = get_db(); cursor = db.cursor()
-    cursor.execute("SELECT id, driver_name, team FROM drivers ORDER BY RANDOM() LIMIT 1")
-    rd = cursor.fetchone()
-    cursor.execute("SELECT id, track_name FROM tracks ORDER BY RANDOM() LIMIT 1")
-    rt = cursor.fetchone()
+    cursor.execute("SELECT id, driver_name, team FROM drivers ORDER BY RANDOM() LIMIT 1"); rd = cursor.fetchone()
+    cursor.execute("SELECT id, track_name FROM tracks ORDER BY RANDOM() LIMIT 1"); rt = cursor.fetchone()
     live = None
     if rd and rt:
-        live = {'driver': rd['driver_name'], 'team': rd['team'], 'track': rt['track_name'],
-                'time': format_time(80.0 + random.random() * 5.0), 'year': 2026, 'is_live': True}
-    cursor.execute("SELECT d.driver_name, d.team, t.track_name, r.lap_time_sec, r.year "
-                   "FROM results r JOIN drivers d ON r.driver_id = d.id "
-                   "JOIN tracks t ON r.track_id = t.id ORDER BY r.id DESC LIMIT 10")
+        live = {'driver': rd['driver_name'], 'team': rd['team'], 'track': rt['track_name'], 'time': format_time(80.0 + random.random() * 5.0), 'year': 2026, 'is_live': True}
+    cursor.execute("SELECT d.driver_name, d.team, t.track_name, r.lap_time_sec, r.year FROM results r JOIN drivers d ON r.driver_id = d.id JOIN tracks t ON r.track_id = t.id ORDER BY r.id DESC LIMIT 10")
     rows = cursor.fetchall()
-    history = [{'driver': r['driver_name'], 'team': r['team'], 'track': r['track_name'],
-                'time': format_time(r['lap_time_sec']), 'year': r['year'], 'is_live': False} for r in rows]
+    history = [{'driver': r['driver_name'], 'team': r['team'], 'track': r['track_name'], 'time': format_time(r['lap_time_sec']), 'year': r['year'], 'is_live': False} for r in rows]
     return jsonify({'results': [live] + history if live else history, 'message': 'Live stream active'})
 
 
