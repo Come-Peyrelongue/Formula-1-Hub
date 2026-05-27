@@ -7,7 +7,6 @@ function LivePage() {
 
   const fetchData = async () => {
     try {
-      // Specific Route for Live Stream
       const response = await axios.get('http://127.0.0.1:5000/api/live-stream')
       setData(response.data)
       setLastUpdate(new Date())
@@ -23,26 +22,79 @@ function LivePage() {
   }, [])
 
   return (
-    <div>
-      <div>
-        <h2 className="fw-bold text-dark">Live Timing</h2>
+    <div className="d-flex flex-column h-100" style={{ overflow: 'hidden' }}>
+
+      {/* Header */}
+      <div style={{ flexShrink: 0, marginBottom: 'var(--gap-lg)' }}>
+        <div className="d-flex justify-content-between align-items-center">
+          <div>
+            <h2 style={{ color: 'var(--text-heading)', fontWeight: 700 }}>Live Timing</h2>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '13px' }}>
+              Real-time lap data stream
+            </p>
+          </div>
+          <div className="d-flex align-items-center gap-2">
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'var(--font-data)' }}>
+              {lastUpdate.toLocaleTimeString()}
+            </span>
+            <span className="badge-live">LIVE</span>
+          </div>
+        </div>
       </div>
-      <div>
-        <table className="table table-hover">
-          <thead className="table-dark">
-            <tr><th>Status</th><th>Driver</th><th>Team</th><th>Track</th><th>Time</th><th>Year</th></tr>
+
+      {/* Table */}
+      <div className="flex-grow-1" style={{ overflow: 'auto', minHeight: 0 }}>
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th style={{ width: '60px' }}>Status</th>
+              <th>Driver</th>
+              <th>Team</th>
+              <th>Track</th>
+              <th style={{ textAlign: 'right' }}>Time</th>
+              <th style={{ textAlign: 'center' }}>Year</th>
+            </tr>
           </thead>
           <tbody>
             {data.results.map((r, i) => (
-              <tr key={i} className={r.is_live ? 'table-warning' : ''}>
+              <tr key={i} style={{
+                background: r.is_live ? 'rgba(225, 6, 0, 0.06)' : undefined,
+                borderLeft: r.is_live ? '3px solid var(--f1-red)' : '3px solid transparent',
+              }}>
                 <td>
-                  {r.is_live ? <span className="badge bg-danger animate__animated animate__flash">LIVE</span> : '-'}
+                  {r.is_live ? (
+                    <span style={{
+                      fontSize: '9px', padding: '2px 6px',
+                      background: 'var(--f1-red)', color: 'white',
+                      borderRadius: '2px', fontWeight: 700,
+                      fontFamily: 'var(--font-data)',
+                    }}>LIVE</span>
+                  ) : (
+                    <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>—</span>
+                  )}
                 </td>
-                <td><strong>{r.driver}</strong></td>
-                <td><span className="badge bg-secondary">{r.team}</span></td>
-                <td>{r.track}</td>
-                <td className={r.is_live ? 'text-danger fw-bold' : 'text-success fw-bold'}>{r.time}</td>
-                <td>{r.year}</td>
+                <td style={{ fontWeight: 600 }}>{r.driver}</td>
+                <td>
+                  <span style={{
+                    fontSize: '10px', padding: '2px 6px',
+                    background: 'var(--bg-elevated)',
+                    border: '1px solid var(--border-subtle)',
+                    borderRadius: '3px',
+                    color: 'var(--text-secondary)',
+                  }}>
+                    {r.team}
+                  </span>
+                </td>
+                <td style={{ color: 'var(--text-secondary)' }}>{r.track}</td>
+                <td style={{
+                  textAlign: 'right',
+                  fontFamily: 'var(--font-data)',
+                  fontWeight: 600,
+                  color: r.is_live ? 'var(--f1-red)' : 'var(--accent-green)',
+                }}>
+                  {r.time}
+                </td>
+                <td style={{ textAlign: 'center', color: 'var(--text-muted)' }}>{r.year}</td>
               </tr>
             ))}
           </tbody>
