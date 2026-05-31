@@ -1,4 +1,5 @@
 import { BrowserRouter as Router, Routes, Route, NavLink } from 'react-router-dom'
+import { useState } from 'react'
 import { ThemeProvider, useTheme } from './context/ThemeContext'
 import Home from './components/Home'
 import HistoricalPage from './components/HistoricalPage'
@@ -11,13 +12,14 @@ import './Sidebar.css'
 
 function AppContent() {
   const { theme, toggleTheme } = useTheme()
+  const [sidebarExpanded, setSidebarExpanded] = useState(false)
 
   return (
     <Router>
       <div className="d-flex" style={{ height: '100vh', overflow: 'hidden' }}>
 
         {/* SIDEBAR */}
-        <nav className="sidebar">
+        <nav className={`sidebar ${sidebarExpanded ? 'sidebar--expanded' : ''}`}>
           <div>
             <ul className="nav flex-column w-100" style={{ paddingTop: '12px' }}>
               <li className="nav-item">
@@ -50,10 +52,11 @@ function AppContent() {
             </ul>
           </div>
 
-          {/* Bottom section: theme toggle + logo */}
+          {/* Bottom section */}
           <div>
+            {/* Theme toggle */}
             <button
-              className="sidebar-theme-toggle"
+              className="sidebar-btn"
               onClick={toggleTheme}
               title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
             >
@@ -63,6 +66,18 @@ function AppContent() {
               <span className="sidebar-text">
                 {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
               </span>
+            </button>
+
+            {/* Sidebar expand/collapse toggle */}
+            <button
+              className="sidebar-btn"
+              onClick={() => setSidebarExpanded(prev => !prev)}
+              title={sidebarExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
+            >
+              <span className="material-symbols-outlined">
+                {sidebarExpanded ? 'left_panel_close' : 'left_panel_open'}
+              </span>
+              <span className="sidebar-text">Collapse</span>
             </button>
 
             <div className="sidebar-logo-container">

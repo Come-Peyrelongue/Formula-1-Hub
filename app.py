@@ -79,14 +79,15 @@ def _classify_rc_event(rc):
             return "GREEN FLAG", "green", "track"
         return None, None, None
 
-    if category == "FLAG":
-        is_sector = (scope_raw == "SECTOR" or "SECTOR" in message or "IN TRACK SECTOR" in message)
-        scope = "sector" if is_sector else "track"
+        if category == "FLAG":
+            is_sector = (scope_raw == "SECTOR" or "SECTOR" in message or "IN TRACK SECTOR" in message)
+            scope = "sector" if is_sector else "track"
 
+        # CHEQUERED must be checked BEFORE RED (because "CHEQUERED FLAG" contains "RED FLAG")
+        if "CHEQUERED" in flag or "CHECKERED" in flag or "CHEQUERED" in message:
+            return "CHEQUERED FLAG", "chequered", "track"
         if "RED" in flag or "RED FLAG" in message:
             return "RED FLAG", "red", "track"
-        if "CHEQUERED" in flag or "CHECKERED" in flag:
-            return "CHEQUERED FLAG", "chequered", "track"
         if "DOUBLE YELLOW" in flag or "DOUBLE YELLOW" in message:
             return "YELLOW FLAG", "yellow", scope
         if "YELLOW" in flag:
@@ -224,6 +225,55 @@ class RaceStandingsManager:
             "gap": self.format_gap(e["gap_to_leader"]),
             "interval": self.format_gap(e["interval"]),
         } for e in self.current_standings]
+    
+    def get_quali_display(self, laps_by_driver):
+        """
+        For Qualifying/Practice: rank drivers by their best lap time.
+        laps_by_driver: dict {driver_number: [lap_dicts]}
+        """
+        best_times = []
+        for dn, laps in laps_by_driver.items():
+            driver_info = self.driver_map.get(dn, {})
+            best = None
+            for lap in laps:
+                lt = lap.get('lap_duration')
+                if lt is not None and lt > 0:
+                    if best is None or lt < best:
+                        best = lt
+            best_times.append({
+                "driver_number": dn,
+                "acronym": driver_info.get("acronym", f"#{dn}"),
+                "team_colour": driver_info.get("team_colour", "FFFFFF"),
+                "best_lap": best,
+            })
+
+        # Sort by best lap time (None = no time set → at bottom)
+        best_times.sort(key=lambda x: x["best_lap"] if x["best_lap"] is not None else 9999)
+
+        result = []
+        leader_time = best_times[0]["best_lap"] if best_times and best_times[0]["best_lap"] else None
+
+        for i, entry in enumerate(best_times):
+            if entry["best_lap"] is None:
+                gap_str = "NO TIME"
+            elif i == 0:
+                m = int(entry["best_lap"] // 60)
+                s = entry["best_lap"] % 60
+                gap_str = f"{m}:{s:06.3f}"
+            else:
+                delta = entry["best_lap"] - leader_time
+                gap_str = f"+{delta:.3f}"
+
+            result.append({
+                "position": i + 1,
+                "driver_number": entry["driver_number"],
+                "acronym": entry["acronym"],
+                "team_colour": entry["team_colour"],
+                "gap": gap_str,
+                "interval": gap_str,
+            })
+
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -287,6 +337,9 @@ class OpenF1Connector:
         self.session_type = "Unknown"
         self.total_laps   = 0
 
+        self.session_best_sectors = {1: None, 2: None, 3: None}
+        self.session_best_lap_time = None
+
         self.replay_speed      = 1.0
         self.replay_wall_start = None
         self.replay_data_start = None
@@ -299,6 +352,10 @@ class OpenF1Connector:
         self._last_standings_update    = None
         self._standings_update_interval = 4.0
         self._current_replay_dt        = None
+
+        self.replay_paused = False
+        self._pause_wall_time = None
+        self._pause_elapsed = 0.0
 
     # ------------------------------------------------------------------
     # Session loading (called from /api/replay/load)
@@ -445,6 +502,8 @@ class OpenF1Connector:
                     coord = (p['x'], p['y'])
                     if coord not in seen:
                         self.track_layout.append(coord); seen.add(coord)
+
+            self._compute_session_bests()
 
             self.current_index = 0
             self._reset_replay_clock()
@@ -625,8 +684,13 @@ class OpenF1Connector:
     def _get_replay_state(self):
         if not self.sample_dates or not self.replay_data_start:
             return 0, 0, 0.0, None
-        elapsed_wall = (time.monotonic() - self.replay_wall_start) * self.replay_speed
-        target_dt    = self.replay_data_start + timedelta(seconds=elapsed_wall)
+
+        if self.replay_paused:
+            elapsed_wall = self._pause_elapsed
+        else:
+            elapsed_wall = (time.monotonic() - self.replay_wall_start) * self.replay_speed
+
+        target_dt = self.replay_data_start + timedelta(seconds=elapsed_wall)
         if self.replay_data_end and target_dt >= self.replay_data_end:
             self._reset_replay_clock()
             target_dt = self.replay_data_start
@@ -650,6 +714,18 @@ class OpenF1Connector:
         va = safe_float(a.get(key), default)
         vb = safe_float(b.get(key), va)
         return lerp(va, vb, alpha)
+
+    def toggle_pause(self):
+        if self.replay_paused:
+            # Resume: adjust wall_start so elapsed stays the same
+            self.replay_wall_start = time.monotonic() - (self._pause_elapsed / self.replay_speed)
+            self.replay_paused = False
+            return False  # not paused anymore
+        else:
+            # Pause: save current elapsed
+            self._pause_elapsed = (time.monotonic() - self.replay_wall_start) * self.replay_speed
+            self.replay_paused = True
+            return True  # now paused
 
     # ------------------------------------------------------------------
     # Weather
@@ -716,12 +792,64 @@ class OpenF1Connector:
         return best
 
     def _sector_color(self, lap_num, sector_num, value):
-        if not value or value <= 0: return None
-        gb = self.global_best_sectors.get(sector_num)
-        pb = self._previous_personal_best(lap_num, sector_num)
+        """
+        Purple: fastest of ANY driver in the session
+        Green: personal best for this driver (but not session best)
+        Yellow: slower than personal best
+        """
+        if not value or value <= 0:
+            return None
+
         eps = 0.001
-        if gb is not None and abs(value - gb) <= eps: return "purple"
-        if pb is None or value < pb - eps: return "green"
+
+        # Check session-wide best (purple)
+        session_best = self.session_best_sectors.get(sector_num)
+        if session_best is not None and abs(value - session_best) <= eps:
+            return "purple"
+
+        # Check personal best up to this lap (green)
+        pb = self._previous_personal_best(lap_num, sector_num)
+        if pb is None or value < pb - eps:
+            return "green"
+
+        # Slower than personal best (yellow)
+        return "yellow"
+    
+    def _lap_time_color(self, lap_num, lap_time):
+        """
+        Same logic as sector colors but for total lap time.
+        Purple: session best lap time (any driver)
+        Green: personal best lap time
+        Yellow: slower than personal best
+        """
+        if not lap_time or lap_time <= 0:
+            return None
+
+        eps = 0.001
+
+        # Session best
+        if self.session_best_lap_time is not None and abs(lap_time - self.session_best_lap_time) <= eps:
+            return "purple"
+
+        # Personal best (check all previous laps for this driver)
+        personal_best = None
+        for lap in self.laps_cache:
+            n = lap.get('lap_number')
+            if n is None:
+                continue
+            try:
+                n = int(n)
+            except:
+                continue
+            if n >= lap_num:
+                continue
+            lt = safe_float(lap.get('lap_duration'), 0.0)
+            if lt > 0 and (personal_best is None or lt < personal_best):
+                personal_best = lt
+
+        if personal_best is None or lap_time < personal_best - eps:
+            return "green"
+
         return "yellow"
 
     def _format_completed_lap(self, lap):
@@ -738,11 +866,36 @@ class OpenF1Connector:
             "sector_1_color": self._sector_color(lap_num, 1, s1),
             "sector_2_color": self._sector_color(lap_num, 2, s2),
             "sector_3_color": self._sector_color(lap_num, 3, s3),
+            "lap_time_color": self._lap_time_color(lap_num, tot),
         }
 
     # ------------------------------------------------------------------
     # Flag status
     # ------------------------------------------------------------------
+
+    def _compute_session_bests(self):
+        """Compute session-wide best sectors and lap time across ALL drivers."""
+        bests = {1: None, 2: None, 3: None}
+        best_lap = None
+
+        source = getattr(self, '_all_drivers_laps', {})
+        if not source:
+            # Fallback: use only tracked driver's laps
+            source = {int(self.driver_number): self.laps_cache}
+
+        for dn, laps in source.items():
+            for lap in laps:
+                for sn, field in [(1, 'duration_sector_1'), (2, 'duration_sector_2'), (3, 'duration_sector_3')]:
+                    val = safe_float(lap.get(field), 0.0)
+                    if val > 0 and (bests[sn] is None or val < bests[sn]):
+                        bests[sn] = val
+                lt = safe_float(lap.get('lap_duration'), 0.0)
+                if lt > 0 and (best_lap is None or lt < best_lap):
+                    best_lap = lt
+
+        self.session_best_sectors = bests
+        self.session_best_lap_time = best_lap
+        print(f"  🎨 Session bests — S1: {bests[1]}, S2: {bests[2]}, S3: {bests[3]}, Lap: {best_lap}")
 
     def _race_control_status(self, curr_dt):
         default = {"label": "GREEN FLAG", "type": "green", "message": "Track clear", "flag": "GREEN"}
@@ -877,13 +1030,140 @@ class OpenF1Connector:
             "tyre_compound": stint_info["compound"],
             "tyre_age": stint_info["tyre_age"],
             "stint_number": stint_info["stint_number"],
+            "session_timing": self._get_session_timing(target_dt),
+            "paused": self.replay_paused,
         }
 
     def get_race_positions(self):
         if self.session_key is None:
             return []
-        self.standings_manager.update(self._current_replay_dt)
-        return self.standings_manager.get_display()
+
+        session_type_upper = (self.session_type or '').upper()
+        is_race = session_type_upper in ('RACE', 'SPRINT', 'SPRINT RACE')
+
+        if is_race:
+            # ─── RACE/SPRINT: Real-time positions + gaps ───
+            dt = self._current_replay_dt
+            if dt is None and self.replay_data_start:
+                dt = self.replay_data_start
+
+            self.standings_manager.update(dt)
+            display = self.standings_manager.get_display()
+
+            # Fallback if no data yet
+            if not display and self.standings_manager.driver_map:
+                fallback = []
+                for i, (dn, info) in enumerate(self.standings_manager.driver_map.items(), 1):
+                    fallback.append({
+                        "position": i, "driver_number": dn,
+                        "acronym": info.get("acronym", f"#{dn}"),
+                        "team_colour": info.get("team_colour", "FFFFFF"),
+                        "gap": "--", "interval": "--",
+                    })
+                return fallback
+            return display
+
+        else:
+            # ─── QUALIFYING / PRACTICE / SPRINT QUALIFYING: Best lap times ───
+            # Fetch all drivers' laps (cached after first call)
+            if not hasattr(self, '_all_drivers_laps') or getattr(self, '_all_drivers_laps_session', None) != self.session_key:
+                headers = {"User-Agent": "Mozilla/5.0"}
+                try:
+                    req = requests.Request('GET', f"{self.base_url}/laps",
+                                           params={'session_key': self.session_key}, headers=headers).prepare()
+                    resp = requests.get(req.url, timeout=20, verify=False)
+                    if resp.status_code == 200:
+                        all_laps = resp.json()
+                        self._all_drivers_laps = {}
+                        for lap in all_laps:
+                            dn = lap.get('driver_number')
+                            if dn is not None:
+                                dn = int(dn)
+                                if dn not in self._all_drivers_laps:
+                                    self._all_drivers_laps[dn] = []
+                                self._all_drivers_laps[dn].append(lap)
+                        self._all_drivers_laps_session = self.session_key
+                        print(f"  📊 Loaded laps for {len(self._all_drivers_laps)} drivers")
+                        self._compute_session_bests()
+                    else:
+                        self._all_drivers_laps = {}
+                        self._all_drivers_laps_session = self.session_key
+                except Exception as e:
+                    print(f"  ⚠️ Could not fetch all laps: {e}")
+                    self._all_drivers_laps = {}
+                    self._all_drivers_laps_session = self.session_key
+
+            # Filter laps up to current replay time
+            curr_dt = self._current_replay_dt or self.replay_data_start
+            filtered_laps = {}
+
+            for dn, laps in self._all_drivers_laps.items():
+                valid_laps = []
+                for lap in laps:
+                    lap_dt = parse_dt(lap.get('date_start', ''))
+                    if curr_dt and lap_dt and lap_dt <= curr_dt:
+                        valid_laps.append(lap)
+                    elif not lap_dt:
+                        valid_laps.append(lap)
+                if valid_laps:
+                    filtered_laps[dn] = valid_laps
+
+            return self.standings_manager.get_quali_display(filtered_laps)
+
+    def _get_session_timing(self, curr_dt):
+        if curr_dt is None:
+            return {"mode": "unknown"}
+
+        session_type_upper = (self.session_type or '').upper()
+        is_race = session_type_upper in ('RACE', 'SPRINT', 'SPRINT RACE')
+        is_quali = 'QUALI' in session_type_upper
+
+        if is_race:
+            current_lap_data = self._find_current_lap_by_dt(curr_dt)
+            lap_num = int(current_lap_data.get('lap_number', 1)) if current_lap_data else 1
+            return {"mode": "race", "lap": lap_num, "total_laps": self.total_laps}
+
+        if is_quali:
+            # Count "SESSION STARTED" to determine Q1/Q2/Q3
+            phase_starts = []
+            start_count = 0
+
+            for rc in self.race_control_cache:
+                rc_dt = rc.get('_dt')
+                if rc_dt and rc_dt <= curr_dt:
+                    msg = (rc.get('message') or '').upper()
+                    cat = (rc.get('category') or '').upper()
+                    if cat == 'SESSIONSTATUS' and 'STARTED' in msg:
+                        start_count += 1
+                        phase_starts.append((rc_dt, f"Q{min(start_count, 3)}"))
+
+            if not phase_starts:
+                return {"mode": "qualifying", "phase": "Q1", "remaining": 18 * 60}
+
+            phase_start_dt, phase = phase_starts[-1]
+            phase_durations = {"Q1": 18 * 60, "Q2": 15 * 60, "Q3": 12 * 60}
+            duration = phase_durations.get(phase, 18 * 60)
+            elapsed = (curr_dt - phase_start_dt).total_seconds()
+            remaining = max(0, duration - elapsed)
+
+            return {"mode": "qualifying", "phase": phase, "remaining": round(remaining)}
+
+        # ─── PRACTICE ───
+        # Default 60 minutes for FP sessions
+        total_duration = 60 * 60
+
+        # Try to detect actual duration from session name
+        session_name_upper = session_type_upper
+        if 'SPRINT' in session_name_upper and 'SHOOTOUT' in session_name_upper:
+            total_duration = 30 * 60  # Sprint Shootout = 30 min
+
+        if self.session_start_dt:
+            elapsed = (curr_dt - self.session_start_dt).total_seconds()
+            remaining = max(0, total_duration - elapsed)
+        else:
+            remaining = 0
+
+        return {"mode": "practice", "remaining": round(remaining)}
 
 
 # ---------------------------------------------------------------------------
@@ -1226,6 +1506,131 @@ def get_live_stream():
     history = [{'driver': r['driver_name'], 'team': r['team'], 'track': r['track_name'], 'time': format_time(r['lap_time_sec']), 'year': r['year'], 'is_live': False} for r in rows]
     return jsonify({'results': [live] + history if live else history, 'message': 'Live stream active'})
 
+@app.route('/api/speed-trace', methods=['GET'])
+def get_speed_trace():
+    """
+    Returns speed data sampled at regular intervals for the last N laps.
+    All laps share the same time grid (every 0.5s) for easy chart rendering.
+    """
+    try:
+        if connector.session_key is None or connector.total_samples == 0:
+            return jsonify({"laps": []})
+
+        num_laps = int(request.args.get('laps', 5))
+        curr_dt = connector._current_replay_dt
+
+        if curr_dt is None and connector.replay_data_start:
+            curr_dt = connector.replay_data_start
+
+        if curr_dt is None:
+            return jsonify({"laps": []})
+
+        # Find current lap
+        current_lap_data = connector._find_current_lap_by_dt(curr_dt)
+        current_lap_num = int(current_lap_data.get('lap_number', 1)) if current_lap_data else 1
+
+        # Which laps to show
+        start_lap = max(1, current_lap_num - num_laps + 1)
+        laps_to_show = list(range(start_lap, current_lap_num + 1))
+
+        # Sampling interval in seconds
+        SAMPLE_INTERVAL = 0.5
+        result = []
+
+        for lap_num in laps_to_show:
+            lap_info = connector.lap_by_number.get(lap_num)
+            if not lap_info:
+                continue
+
+            lap_start_dt = parse_dt(lap_info.get('date_start', ''))
+            if not lap_start_dt:
+                continue
+
+            lap_duration = safe_float(lap_info.get('lap_duration'), 0.0)
+
+            # Determine lap end
+            next_lap = connector.lap_by_number.get(lap_num + 1)
+            if next_lap:
+                lap_end_dt = parse_dt(next_lap.get('date_start', ''))
+            elif lap_duration > 0:
+                lap_end_dt = lap_start_dt + timedelta(seconds=lap_duration)
+            else:
+                lap_end_dt = curr_dt
+
+            if not lap_end_dt:
+                lap_end_dt = curr_dt
+
+            is_current = (lap_num == current_lap_num)
+            if is_current:
+                lap_end_dt = min(lap_end_dt, curr_dt)
+
+            # Get raw data indices for this lap
+            start_idx = bisect_right(connector.sample_dates, lap_start_dt)
+            end_idx = bisect_right(connector.sample_dates, lap_end_dt)
+
+            if start_idx >= end_idx or end_idx - start_idx < 2:
+                continue
+
+            # Build lookup: sorted list of (time_in_lap, speed)
+            raw_points = []
+            for i in range(start_idx, end_idx):
+                sdt = connector.sample_dates[i]
+                if sdt is None:
+                    continue
+                t = (sdt - lap_start_dt).total_seconds()
+                speed = safe_float(connector.car_data_cache[i].get('speed'), 0.0)
+                raw_points.append((t, speed))
+
+            if len(raw_points) < 2:
+                continue
+
+            # Resample at regular intervals using linear interpolation
+            max_t = raw_points[-1][0]
+            points = []
+            raw_idx = 0
+
+            t = 0.0
+            while t <= max_t:
+                # Find bracketing raw points
+                while raw_idx < len(raw_points) - 1 and raw_points[raw_idx + 1][0] < t:
+                    raw_idx += 1
+
+                if raw_idx >= len(raw_points) - 1:
+                    # Use last point
+                    points.append({"t": round(t, 1), "speed": round(raw_points[-1][1], 1)})
+                else:
+                    t0, s0 = raw_points[raw_idx]
+                    t1, s1 = raw_points[raw_idx + 1]
+                    if t1 == t0:
+                        speed = s0
+                    else:
+                        alpha = (t - t0) / (t1 - t0)
+                        speed = s0 + (s1 - s0) * alpha
+                    points.append({"t": round(t, 1), "speed": round(speed, 1)})
+
+                t += SAMPLE_INTERVAL
+
+            if points:
+                result.append({
+                    "lap_number": lap_num,
+                    "points": points,
+                    "lap_time": lap_duration if not is_current else None,
+                    "is_current": is_current,
+                })
+
+        return jsonify({"laps": result, "current_lap": current_lap_num})
+
+    except Exception as e:
+        print(f"⚠️ Speed trace error: {e}")
+        return jsonify({"laps": [], "error": str(e)}), 200
+
+@app.route('/api/replay/pause', methods=['POST'])
+def replay_pause():
+    try:
+        paused = connector.toggle_pause()
+        return jsonify({"paused": paused})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
