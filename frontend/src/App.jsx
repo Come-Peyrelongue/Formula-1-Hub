@@ -3,7 +3,6 @@ import { useState } from 'react'
 import { ThemeProvider, useTheme } from './context/ThemeContext'
 import Home from './components/Home'
 import HistoricalPage from './components/HistoricalPage'
-import LivePage from './components/LivePage'
 import TelemetryPage from './components/TelemetryPage'
 import 'bootstrap/dist/css/bootstrap.min.css'
 import f1Logo from './assets/img/formula-1-logo.png'
@@ -32,12 +31,6 @@ function AppContent() {
                 <NavLink to="/historical" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`}>
                   <span className="material-symbols-outlined">sports_score</span>
                   <span className="sidebar-text">Historical</span>
-                </NavLink>
-              </li>
-              <li className="nav-item">
-                <NavLink to="/live" className={({ isActive }) => `nav-link ${isActive ? 'nav-link--active' : ''}`}>
-                  <span className="material-symbols-outlined">avg_time</span>
-                  <span className="sidebar-text">Live Timing</span>
                 </NavLink>
               </li>
 
@@ -101,7 +94,6 @@ function AppContent() {
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/historical" element={<HistoricalPage />} />
-            <Route path="/live" element={<LivePage />} />
             <Route path="/replay" element={<TelemetryPage />} />
           </Routes>
         </main>
